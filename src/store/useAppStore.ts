@@ -32,16 +32,19 @@ const defaultMonteCarloConfig: MonteCarloConfig = {
   successThreshold: 90,
 }
 
+const defaultQuarterlyPayments = (year: number): QuarterlyPayment[] => [
+  { year, quarter: 1, amountPaid: null, estimatedDue: null },
+  { year, quarter: 2, amountPaid: null, estimatedDue: null },
+  { year, quarter: 3, amountPaid: null, estimatedDue: null },
+  { year, quarter: 4, amountPaid: null, estimatedDue: null },
+]
+
 const defaultTaxConfig: TaxConfig = {
   usFederalEffectiveRate: 22,
   usCaliforniaEffectiveRate: 9.3,
   frCombinedEffectiveRate: 11,
-  quarterlyPayments: [
-    { year: 2026, quarter: 1, amountPaid: 8200, estimatedDue: 8200 },
-    { year: 2026, quarter: 2, amountPaid: null, estimatedDue: 8200 },
-    { year: 2026, quarter: 3, amountPaid: null, estimatedDue: null },
-    { year: 2026, quarter: 4, amountPaid: null, estimatedDue: null },
-  ],
+  quarterlyPayments: defaultQuarterlyPayments(new Date().getFullYear()),
+  stateQuarterlyPayments: defaultQuarterlyPayments(new Date().getFullYear()),
 }
 
 // ─── Store interface ──────────────────────────────────────────────────────────
@@ -83,6 +86,7 @@ interface AppState {
   setMonteCarloConfig: (patch: Partial<MonteCarloConfig>) => void
   setTaxConfig: (patch: Partial<TaxConfig>) => void
   upsertQuarterlyPayment: (payment: QuarterlyPayment) => void
+  upsertStatePayment: (payment: QuarterlyPayment) => void
   setSimulationResult: (result: SimulationResult | null) => void
   setSimulationRunning: (running: boolean) => void
 }
@@ -178,6 +182,19 @@ export const useAppStore = create<AppState>()(
               : [...s.taxConfig.quarterlyPayments, payment],
           },
         })),
+      upsertStatePayment: (payment) =>
+        set((s) => ({
+          taxConfig: {
+            ...s.taxConfig,
+            stateQuarterlyPayments: (s.taxConfig.stateQuarterlyPayments ?? []).some(
+              (p) => p.year === payment.year && p.quarter === payment.quarter
+            )
+              ? (s.taxConfig.stateQuarterlyPayments ?? []).map((p) =>
+                  p.year === payment.year && p.quarter === payment.quarter ? payment : p
+                )
+              : [...(s.taxConfig.stateQuarterlyPayments ?? []), payment],
+          },
+        })),
 
       setSimulationResult: (simulationResult) => set({ simulationResult }),
       setSimulationRunning: (simulationRunning) => set({ simulationRunning }),
@@ -195,7 +212,11 @@ export const useAppStore = create<AppState>()(
         expenses: s.expenses,
         windfalls: s.windfalls,
         monteCarloConfig: s.monteCarloConfig,
-        taxConfig: s.taxConfig,
+        taxConfig: {
+          ...s.taxConfig,
+          // ensure stateQuarterlyPayments is always persisted even if missing from old data
+          stateQuarterlyPayments: s.taxConfig.stateQuarterlyPayments ?? defaultQuarterlyPayments(new Date().getFullYear()),
+        },
       }),
     }
   )

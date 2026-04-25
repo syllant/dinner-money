@@ -129,7 +129,9 @@ export default function Accounts() {
             <TableRow key={acc.id}>
               <div className="grid grid-cols-[2fr_1fr_1fr_1.5fr_1fr_60px] gap-2 items-center">
                 <span className="font-medium truncate">{acc.name}</span>
-                <span>{formatCurrency(acc.balance, acc.currency)}</span>
+                <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                  {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
+                </span>
                 <span><Badge variant={acc.currency.toUpperCase() === 'EUR' ? 'eur' : 'usd'}>{acc.currency.toUpperCase()}</Badge></span>
                 {editingId === acc.id ? (
                   <div className="flex gap-1 text-[11px]">
@@ -155,6 +157,8 @@ export default function Accounts() {
                   <option value="retirement">Retirement</option>
                   <option value="cash">Cash</option>
                   <option value="real_estate">Real estate</option>
+                  <option value="loan">Loan / Mortgage</option>
+                  <option value="credit">Credit card</option>
                   <option value="other">Other</option>
                 </select>
                 <button

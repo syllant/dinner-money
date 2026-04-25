@@ -1,13 +1,21 @@
 import type { Currency } from '../types'
 
-const EUR = new Intl.NumberFormat('en-EU', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
-const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+// Use the browser's locale so thousands separators match the user's expectations
+// (e.g. 1,000 for en-US, 1 000 for fr-FR)
+const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
 
 export function formatCurrency(amount: number, currency: Currency | string): string {
   const c = currency.toUpperCase()
-  if (c === 'EUR') return EUR.format(amount)
-  if (c === 'USD') return USD.format(amount)
-  return `${amount.toLocaleString()} ${c}`
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: c,
+      maximumFractionDigits: 0,
+    }).format(amount)
+  } catch {
+    // Fallback for unknown currency codes
+    return `${amount.toLocaleString(locale)} ${c}`
+  }
 }
 
 export function formatPct(value: number, decimals = 1): string {

@@ -98,10 +98,16 @@ export default function Investments() {
 
         <Card>
           <CardTitle>Recent investment transactions</CardTitle>
-          <div className="text-[12px] text-gray-500 dark:text-gray-400 py-2">
-            Investment transaction history will appear here once LunchMoney is connected and synced.{' '}
-            <a href="#/settings" className="text-blue-600 underline">Connect in Settings →</a>
-          </div>
+          {accounts.length === 0 ? (
+            <div className="text-[12px] text-gray-500 dark:text-gray-400 py-2">
+              Sync your accounts from LunchMoney to see investment transactions.{' '}
+              <a href="#/config/accounts" className="text-blue-600 underline">Go to Accounts →</a>
+            </div>
+          ) : (
+            <div className="text-[12px] text-gray-500 dark:text-gray-400 py-2">
+              Transaction-level history requires LunchMoney transaction sync — coming in a future update.
+            </div>
+          )}
         </Card>
       </div>
     </div>

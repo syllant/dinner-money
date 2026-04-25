@@ -124,13 +124,22 @@ function decodeHtml(str: string): string {
 }
 
 /** Map LM account type strings to our AccountType enum */
-export function mapLMType(
-  typeName: string
-): 'investment' | 'retirement' | 'cash' | 'real_estate' | 'other' {
+export function mapLMType(typeName: string): import('../types').AccountType {
   const t = typeName.toLowerCase()
+  // Retirement / tax-advantaged
+  if (t.includes('401') || t.includes('ira') || t.includes('roth') ||
+      t.includes('retirement') || t.includes('pension') || t.includes('403')) return 'retirement'
+  // Investment / brokerage
   if (t.includes('investment') || t.includes('brokerage')) return 'investment'
-  if (t.includes('401') || t.includes('ira') || t.includes('retirement')) return 'retirement'
-  if (t.includes('checking') || t.includes('savings') || t.includes('cash')) return 'cash'
-  if (t.includes('real') || t.includes('property')) return 'real_estate'
+  // Loans / debts
+  if (t.includes('loan') || t.includes('mortgage') || t.includes('student') ||
+      t.includes('vehicle') || t.includes('auto') || t.includes('home equity')) return 'loan'
+  // Credit cards
+  if (t.includes('credit')) return 'credit'
+  // Cash / depository
+  if (t.includes('checking') || t.includes('savings') || t.includes('cash') ||
+      t.includes('depository') || t.includes('money market') || t.includes('cd')) return 'cash'
+  // Real estate (manual asset type_name)
+  if (t.includes('real estate') || t.includes('property')) return 'real_estate'
   return 'other'
 }

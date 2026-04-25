@@ -31,7 +31,7 @@ export interface AssetAllocation {
   cash: number
 }
 
-export type AccountType = 'investment' | 'retirement' | 'cash' | 'real_estate' | 'other'
+export type AccountType = 'investment' | 'retirement' | 'cash' | 'real_estate' | 'loan' | 'credit' | 'other'
 
 export interface Account {
   id: number             // LunchMoney account ID
@@ -130,7 +130,10 @@ export interface TaxConfig {
   usFederalEffectiveRate: number
   usCaliforniaEffectiveRate: number
   frCombinedEffectiveRate: number
+  /** Federal (IRS) quarterly estimated payments */
   quarterlyPayments: QuarterlyPayment[]
+  /** California FTB quarterly estimated payments */
+  stateQuarterlyPayments: QuarterlyPayment[]
 }
 
 // ─── Simulation results (runtime, not persisted) ──────────────────────────────

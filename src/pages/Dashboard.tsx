@@ -240,13 +240,7 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* LM spending warning placeholder */}
-        {accounts.length > 0 && (
-          <Banner variant="warning">
-            ⚠ Connect LunchMoney to compare actual spending against your plan.{' '}
-            <a href="#/settings" className="underline font-medium">Configure in Settings</a>
-          </Banner>
-        )}
+        {/* LM spending comparison — coming once transaction sync is implemented */}
       </div>
     </div>
   )

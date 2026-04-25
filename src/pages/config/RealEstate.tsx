@@ -42,6 +42,10 @@ export default function RealEstate() {
                     onChange={e => setEditing({ ...editing, currency: e.target.value as 'USD' | 'EUR' })}>
                     <option value="USD">USD</option><option value="EUR">EUR</option>
                   </select></div>,
+                <div key="endDate" className="flex flex-col gap-1"><label className="text-[11px] text-gray-500">End date (YYYY-MM, rentals)</label>
+                  <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800" value={editing.endDate ?? ''}
+                    placeholder="ongoing"
+                    onChange={e => setEditing({ ...editing, endDate: e.target.value || null })} /></div>,
                 <div key="notes" className="flex flex-col gap-1 col-span-2"><label className="text-[11px] text-gray-500">Notes</label>
                   <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800" value={editing.notes}
                     onChange={e => setEditing({ ...editing, notes: e.target.value })} /></div>,
@@ -56,15 +60,16 @@ export default function RealEstate() {
         )}
         <Table>
           <TableHead>
-            <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1.2fr_60px] gap-2">
-              <span>Event</span><span>Date</span><span>Amount</span><span>Currency</span><span>Notes</span><span></span>
+            <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1.2fr_60px] gap-2">
+              <span>Event</span><span>Start</span><span>End</span><span>Amount</span><span>Currency</span><span>Notes</span><span></span>
             </div>
           </TableHead>
           {realEstateEvents.map(e => (
             <TableRow key={e.id}>
-              <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1.2fr_60px] gap-2 items-center">
+              <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1.2fr_60px] gap-2 items-center">
                 <span>{TYPE_LABELS[e.eventType]}</span>
                 <span>{e.date}</span>
+                <span className="text-gray-400">{e.endDate ?? (e.isRecurring ? 'ongoing' : '—')}</span>
                 <span className="font-medium">{formatCurrency(e.amount, e.currency)}{e.isRecurring ? '/mo' : ''}</span>
                 <Badge variant={e.currency === 'EUR' ? 'eur' : 'usd'}>{e.currency}</Badge>
                 <span className="text-[11px] text-gray-400 truncate">{e.notes}</span>

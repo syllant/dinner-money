@@ -10,11 +10,9 @@ const TARGET = 'https://dev.lunchmoney.app'
 
 export default {
   async fetch(request) {
-    // Handle preflight
+    // Handle CORS preflight
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: corsHeaders(),
-      })
+      return new Response(null, { status: 204, headers: corsHeaders() })
     }
 
     const url = new URL(request.url)
@@ -27,15 +25,26 @@ export default {
     })
 
     const response = await fetch(proxied)
-    const newResponse = new Response(response.body, {
+
+    // Copy upstream headers, stripping any CORS headers LunchMoney sends.
+    // LunchMoney returns Access-Control-Allow-Credentials: true which is
+    // incompatible with Access-Control-Allow-Origin: * and causes browsers
+    // to reject the response. We replace all CORS headers with our own.
+    const headers = new Headers()
+    for (const [key, value] of response.headers) {
+      if (!key.toLowerCase().startsWith('access-control-')) {
+        headers.set(key, value)
+      }
+    }
+    for (const [key, value] of Object.entries(corsHeaders())) {
+      headers.set(key, value)
+    }
+
+    return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
-      headers: {
-        ...Object.fromEntries(response.headers),
-        ...corsHeaders(),
-      },
+      headers,
     })
-    return newResponse
   },
 }
 
