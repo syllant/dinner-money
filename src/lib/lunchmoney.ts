@@ -86,10 +86,19 @@ export async function fetchAllAccounts(apiKey: string, proxyUrl?: string | null)
     lmFetch<LMAssetsResponse>('/assets', apiKey, proxyUrl),
     lmFetch<LMPlaidAccountsResponse>('/plaid_accounts', apiKey, proxyUrl),
   ])
-  return {
-    manual: assetsRes.assets ?? [],
-    synced: plaidRes.plaid_accounts ?? [],
-  }
+  const manual = (assetsRes.assets ?? []).map(a => ({
+    ...a,
+    name: decodeHtml(a.name),
+    display_name: a.display_name ? decodeHtml(a.display_name) : null,
+    institution_name: a.institution_name ? decodeHtml(a.institution_name) : null,
+  }))
+  const synced = (plaidRes.plaid_accounts ?? []).map(a => ({
+    ...a,
+    name: decodeHtml(a.name),
+    display_name: a.display_name ? decodeHtml(a.display_name) : null,
+    institution_name: a.institution_name ? decodeHtml(a.institution_name) : null,
+  }))
+  return { manual, synced }
 }
 
 export async function fetchTransactions(
@@ -106,6 +115,13 @@ export async function fetchTransactions(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Decode HTML entities returned by the LunchMoney API (e.g. &#x27; → ') */
+function decodeHtml(str: string): string {
+  const txt = document.createElement('textarea')
+  txt.innerHTML = str
+  return txt.value
+}
 
 /** Map LM account type strings to our AccountType enum */
 export function mapLMType(
