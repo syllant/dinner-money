@@ -58,14 +58,15 @@ export default function Accounts() {
             ? 'Invalid API key (401). Go to Settings to update your token.'
             : `LunchMoney returned an error (${err.status}). ${lmProxyUrl ? 'Check that the proxy URL is correct in Settings.' : 'A CORS proxy is required — configure one in Settings.'}`
         )
-      } else if (err instanceof TypeError) {
+      } else if (err instanceof TypeError && err.message.toLowerCase().includes('fetch')) {
         setSyncError(
           lmProxyUrl
             ? `Could not reach the proxy at ${lmProxyUrl}. Make sure the Cloudflare Worker is deployed and the URL in Settings is correct.`
             : 'Blocked by CORS — LunchMoney only allows requests from its own app. Deploy the Cloudflare Worker proxy and add its URL in Settings.'
         )
       } else {
-        setSyncError('Sync failed — unknown error. Check the browser console for details.')
+        const detail = err instanceof Error ? err.message : String(err)
+        setSyncError(`Sync failed — ${detail}. Check the browser console for details.`)
       }
     } finally {
       setSyncing(false)

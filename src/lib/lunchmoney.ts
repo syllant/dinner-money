@@ -63,7 +63,7 @@ export interface LMAssetsResponse {
 }
 
 export interface LMPlaidAccountsResponse {
-  accounts: LMPlaidAccount[]
+  plaid_accounts: LMPlaidAccount[]
 }
 
 export interface LMUser {
@@ -87,8 +87,8 @@ export async function fetchAllAccounts(apiKey: string, proxyUrl?: string | null)
     lmFetch<LMPlaidAccountsResponse>('/plaid_accounts', apiKey, proxyUrl),
   ])
   return {
-    manual: assetsRes.assets,
-    synced: plaidRes.accounts,
+    manual: assetsRes.assets ?? [],
+    synced: plaidRes.plaid_accounts ?? [],
   }
 }
 
