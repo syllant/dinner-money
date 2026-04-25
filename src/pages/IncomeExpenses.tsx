@@ -263,11 +263,7 @@ export default function IncomeExpenses() {
   const currentYear = new Date().getFullYear()
   const [year, setYear] = useState(currentYear)
 
-  const allItems = buildItems(useAppStore.getState(), year)
-  // Re-build on every render (store is reactive via useAppStore())
   const { expenses, pensions, windfalls, taxConfig, profile } = store
-  void expenses; void pensions; void windfalls; void taxConfig; void profile // track reactivity
-
   const reactiveItems = buildItems({ expenses, pensions, windfalls, taxConfig, profile } as ReturnType<typeof useAppStore.getState>, year)
 
   const incomeItems = reactiveItems.filter(i => i.kind === 'income')

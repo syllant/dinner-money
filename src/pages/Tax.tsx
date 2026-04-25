@@ -66,7 +66,6 @@ export default function Tax() {
   const navigate = useNavigate()
 
   const fedRate = taxConfig.usFederalEffectiveRate / 100
-  const caRate = taxConfig.usCaliforniaEffectiveRate / 100
   const frRate = taxConfig.frCombinedEffectiveRate / 100
 
   const currentYear = new Date().getFullYear()
