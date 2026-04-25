@@ -49,6 +49,7 @@ const defaultTaxConfig: TaxConfig = {
 interface AppState {
   // Auth
   lmApiKey: string | null
+  lmProxyUrl: string | null
   // Config
   profile: UserProfile
   accounts: Account[]
@@ -63,6 +64,7 @@ interface AppState {
   simulationRunning: boolean
   // Actions
   setLmApiKey: (key: string | null) => void
+  setLmProxyUrl: (url: string | null) => void
   setProfile: (patch: Partial<UserProfile>) => void
   setAccounts: (accounts: Account[]) => void
   upsertAccount: (account: Account) => void
@@ -92,6 +94,7 @@ export const useAppStore = create<AppState>()(
     (set) => ({
       // Initial state
       lmApiKey: null,
+      lmProxyUrl: null,
       profile: defaultProfile,
       accounts: [],
       pensions: [],
@@ -105,6 +108,7 @@ export const useAppStore = create<AppState>()(
 
       // Actions
       setLmApiKey: (key) => set({ lmApiKey: key }),
+      setLmProxyUrl: (url) => set({ lmProxyUrl: url }),
       setProfile: (patch) =>
         set((s) => ({ profile: { ...s.profile, ...patch } })),
 
@@ -183,6 +187,7 @@ export const useAppStore = create<AppState>()(
       // Exclude runtime state from persistence
       partialize: (s) => ({
         lmApiKey: s.lmApiKey,
+        lmProxyUrl: s.lmProxyUrl,
         profile: s.profile,
         accounts: s.accounts,
         pensions: s.pensions,

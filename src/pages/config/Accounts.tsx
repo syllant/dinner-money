@@ -10,7 +10,7 @@ import { formatCurrency } from '../../lib/format'
 import type { Account } from '../../types'
 
 export default function Accounts() {
-  const { lmApiKey, accounts, setAccounts, upsertAccount } = useAppStore()
+  const { lmApiKey, lmProxyUrl, accounts, setAccounts, upsertAccount } = useAppStore()
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -20,7 +20,7 @@ export default function Accounts() {
     setSyncing(true)
     setSyncError(null)
     try {
-      const { manual, synced } = await fetchAllAccounts(lmApiKey)
+      const { manual, synced } = await fetchAllAccounts(lmApiKey, lmProxyUrl)
       const now = new Date().toISOString()
       const mapped: Account[] = [
         ...manual.filter(a => !a.closed_on).map(a => ({
@@ -51,7 +51,22 @@ export default function Accounts() {
       const merged = mapped.map(a => existing.has(a.id) ? { ...a, allocation: existing.get(a.id)!.allocation, type: existing.get(a.id)!.type } : a)
       setAccounts(merged)
     } catch (err) {
-      setSyncError(err instanceof LunchMoneyError ? err.message : 'Sync failed')
+      if (err instanceof LunchMoneyError) {
+        const is401 = err.status === 401
+        setSyncError(
+          is401
+            ? 'Invalid API key (401). Go to Settings to update your token.'
+            : `LunchMoney returned an error (${err.status}). ${lmProxyUrl ? 'Check that the proxy URL is correct in Settings.' : 'A CORS proxy is required — configure one in Settings.'}`
+        )
+      } else if (err instanceof TypeError) {
+        setSyncError(
+          lmProxyUrl
+            ? `Could not reach the proxy at ${lmProxyUrl}. Make sure the Cloudflare Worker is deployed and the URL in Settings is correct.`
+            : 'Blocked by CORS — LunchMoney only allows requests from its own app. Deploy the Cloudflare Worker proxy and add its URL in Settings.'
+        )
+      } else {
+        setSyncError('Sync failed — unknown error. Check the browser console for details.')
+      }
     } finally {
       setSyncing(false)
     }
@@ -92,7 +107,15 @@ export default function Accounts() {
             No LunchMoney API key — <a href="#/settings" className="underline font-medium">add one in Settings</a> to sync accounts.
           </Banner>
         )}
-        {syncError && <Banner variant="warning">⚠ {syncError}</Banner>}
+        {lmApiKey && !lmProxyUrl && accounts.length === 0 && !syncError && (
+          <Banner variant="info">
+            A CORS proxy is required to sync from LunchMoney.{' '}
+            <a href="#/settings" className="underline font-medium">Set up a Cloudflare Worker in Settings</a>, then come back here to sync.
+          </Banner>
+        )}
+        {syncError && (
+          <Banner variant="warning">⚠ {syncError}</Banner>
+        )}
 
         <Table>
           <TableHead>

@@ -1,7 +1,11 @@
 // LunchMoney API client — all calls made browser-side using the user's API key.
 // Docs: https://lunchmoney.app/developers
 
-const LM_BASE = 'https://dev.lunchmoney.app/v1'
+const LM_DIRECT = 'https://dev.lunchmoney.app/v1'
+
+function getBase(proxyUrl?: string | null): string {
+  return proxyUrl ? `${proxyUrl.replace(/\/$/, '')}/v1` : LM_DIRECT
+}
 
 export class LunchMoneyError extends Error {
   constructor(
@@ -13,8 +17,9 @@ export class LunchMoneyError extends Error {
   }
 }
 
-async function lmFetch<T>(path: string, apiKey: string): Promise<T> {
-  const res = await fetch(`${LM_BASE}${path}`, {
+async function lmFetch<T>(path: string, apiKey: string, proxyUrl?: string | null): Promise<T> {
+  const base = getBase(proxyUrl)
+  const res = await fetch(`${base}${path}`, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -69,17 +74,17 @@ export interface LMUser {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function fetchCurrentUser(apiKey: string): Promise<LMUser> {
-  return lmFetch<LMUser>('/me', apiKey)
+export async function fetchCurrentUser(apiKey: string, proxyUrl?: string | null): Promise<LMUser> {
+  return lmFetch<LMUser>('/me', apiKey, proxyUrl)
 }
 
-export async function fetchAllAccounts(apiKey: string): Promise<{
+export async function fetchAllAccounts(apiKey: string, proxyUrl?: string | null): Promise<{
   manual: LMAsset[]
   synced: LMPlaidAccount[]
 }> {
   const [assetsRes, plaidRes] = await Promise.all([
-    lmFetch<LMAssetsResponse>('/assets', apiKey),
-    lmFetch<LMPlaidAccountsResponse>('/plaid_accounts', apiKey),
+    lmFetch<LMAssetsResponse>('/assets', apiKey, proxyUrl),
+    lmFetch<LMPlaidAccountsResponse>('/plaid_accounts', apiKey, proxyUrl),
   ])
   return {
     manual: assetsRes.assets,
@@ -90,11 +95,13 @@ export async function fetchAllAccounts(apiKey: string): Promise<{
 export async function fetchTransactions(
   apiKey: string,
   startDate: string, // YYYY-MM-DD
-  endDate: string    // YYYY-MM-DD
+  endDate: string,   // YYYY-MM-DD
+  proxyUrl?: string | null,
 ) {
   return lmFetch<{ transactions: unknown[] }>(
     `/transactions?start_date=${startDate}&end_date=${endDate}`,
-    apiKey
+    apiKey,
+    proxyUrl,
   )
 }
 

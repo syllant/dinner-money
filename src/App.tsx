@@ -1,5 +1,6 @@
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell'
+import { useAppStore } from './store/useAppStore'
 import Dashboard from './pages/Dashboard'
 import Investments from './pages/Investments'
 import CashSavings from './pages/CashSavings'
@@ -14,10 +15,21 @@ import Windfalls from './pages/config/Windfalls'
 import Simulation from './pages/config/Simulation'
 import Settings from './pages/config/Settings'
 
+/** Redirects to /settings when no API key is configured yet */
+function OnboardingGate({ children }: { children: React.ReactNode }) {
+  const lmApiKey = useAppStore((s) => s.lmApiKey)
+  const { pathname } = useLocation()
+  if (!lmApiKey && pathname !== '/settings') {
+    return <Navigate to="/settings" replace />
+  }
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <HashRouter>
       <AppShell>
+        <OnboardingGate>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/investments" element={<Investments />} />
@@ -34,6 +46,7 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </OnboardingGate>
       </AppShell>
     </HashRouter>
   )

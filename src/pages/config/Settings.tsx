@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { Button } from '../../components/ui/Button'
@@ -6,22 +7,47 @@ import { Banner } from '../../components/ui/Banner'
 import { fetchCurrentUser, LunchMoneyError } from '../../lib/lunchmoney'
 
 export default function Settings() {
-  const { lmApiKey, setLmApiKey, taxConfig, setTaxConfig } = useAppStore()
+  const { lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, taxConfig, setTaxConfig } = useAppStore()
   const [keyInput, setKeyInput] = useState(lmApiKey ?? '')
+  const [proxyInput, setProxyInput] = useState(lmProxyUrl ?? '')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [keySaved, setKeySaved] = useState(false)
+
+  function saveKey() {
+    setLmApiKey(keyInput.trim() || null)
+    setKeySaved(true)
+    setTestResult(null)
+  }
 
   async function testConnection() {
     if (!keyInput.trim()) return
     setTesting(true)
     setTestResult(null)
+    setKeySaved(false)
+    const proxy = proxyInput.trim() || null
     try {
-      const user = await fetchCurrentUser(keyInput.trim())
-      setTestResult({ ok: true, message: `Connected as ${user.user_name} (${user.user_email})` })
+      const user = await fetchCurrentUser(keyInput.trim(), proxy)
       setLmApiKey(keyInput.trim())
+      setLmProxyUrl(proxy)
+      setKeySaved(true)
+      setTestResult({ ok: true, message: `Connected as ${user.user_name} (${user.user_email})` })
     } catch (err) {
-      const msg = err instanceof LunchMoneyError ? err.message : 'Connection failed — check your API key'
-      setTestResult({ ok: false, message: msg })
+      if (err instanceof LunchMoneyError) {
+        const is401 = err.status === 401
+        const msg = is401
+          ? 'Invalid API key — double-check the token at my.lunchmoney.app/developers.'
+          : `LunchMoney returned ${err.status}. ${proxy ? 'Check that your proxy URL is correct.' : 'Try adding a CORS proxy URL below.'}`
+        setTestResult({ ok: false, message: msg })
+      } else if (err instanceof TypeError) {
+        // fetch() throws TypeError on network/CORS failure
+        const msg = proxy
+          ? `Could not reach the proxy at ${proxy}. Make sure the Cloudflare Worker is deployed and the URL is correct.`
+          : 'Blocked by CORS — LunchMoney only allows requests from its own app. Deploy a Cloudflare Worker proxy and enter its URL below.'
+        setTestResult({ ok: false, message: msg })
+      } else {
+        setTestResult({ ok: false, message: 'Connection failed — unknown error. Check the browser console for details.' })
+      }
     } finally {
       setTesting(false)
     }
@@ -92,10 +118,10 @@ export default function Settings() {
               type="password"
               className="flex-1 h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
+              onChange={(e) => { setKeyInput(e.target.value); setKeySaved(false) }}
               placeholder="lm_…"
             />
-            <Button onClick={() => setLmApiKey(keyInput.trim())}>Save</Button>
+            <Button onClick={saveKey} disabled={!keyInput.trim()}>Save</Button>
             <Button variant="success" onClick={testConnection} disabled={testing || !keyInput.trim()}>
               {testing ? 'Testing…' : 'Test connection'}
             </Button>
@@ -104,6 +130,75 @@ export default function Settings() {
             <div className={`mt-2 text-[11.5px] ${testResult.ok ? 'text-green-600' : 'text-red-500'}`}>
               {testResult.ok ? '✓ ' : '✗ '}{testResult.message}
             </div>
+          )}
+          {keySaved && (
+            <div className="mt-2 text-[11.5px] text-green-600">
+              ✓ API key saved.{' '}
+              <Link to="/config/accounts" className="underline font-medium">
+                Go to Accounts to sync your balances →
+              </Link>
+            </div>
+          )}
+        </section>
+
+        <hr className="border-gray-200 dark:border-gray-700" />
+
+        {/* CORS proxy */}
+        <section>
+          <h2 className="text-[13px] font-medium mb-2">CORS proxy (required for account sync)</h2>
+          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
+            LunchMoney's API blocks direct browser requests (CORS). A small stateless proxy is required.
+            The easiest option is a free Cloudflare Worker — it takes about 2 minutes to deploy and handles
+            up to 100,000 requests per day.
+          </p>
+          <details className="mb-3 text-[11.5px] text-gray-500 dark:text-gray-400">
+            <summary className="cursor-pointer font-medium text-gray-700 dark:text-gray-300 select-none">
+              How to deploy the Cloudflare Worker proxy
+            </summary>
+            <ol className="mt-2 ml-4 space-y-1 list-decimal">
+              <li>
+                Install the Wrangler CLI:{' '}
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">npm install -g wrangler</code>
+              </li>
+              <li>
+                Login:{' '}
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">wrangler login</code>
+              </li>
+              <li>
+                From the repo root, deploy:{' '}
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">cd worker && wrangler deploy</code>
+              </li>
+              <li>
+                Copy the worker URL (e.g.{' '}
+                <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">https://dinner-money-lm-proxy.&lt;you&gt;.workers.dev</code>
+                ) and paste it below.
+              </li>
+            </ol>
+            <p className="mt-2">
+              The worker source is in{' '}
+              <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">worker/lm-proxy.js</code>{' '}
+              in the repo. It is stateless and logs nothing — your API key is only sent in the Authorization header,
+              directly to LunchMoney.
+            </p>
+          </details>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              className="flex-1 h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+              value={proxyInput}
+              onChange={(e) => setProxyInput(e.target.value)}
+              placeholder="https://dinner-money-lm-proxy.<you>.workers.dev"
+            />
+            <Button
+              onClick={() => {
+                setLmProxyUrl(proxyInput.trim() || null)
+              }}
+            >
+              Save
+            </Button>
+          </div>
+          {lmProxyUrl && (
+            <div className="mt-1 text-[11px] text-green-600">✓ Proxy set: {lmProxyUrl}</div>
           )}
         </section>
 

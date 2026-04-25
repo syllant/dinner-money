@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank, ArrowLeftRight,
   FileText, User, CreditCard, Clock, Home, Receipt,
@@ -54,10 +54,13 @@ export function Sidebar() {
   return (
     <div className="w-[196px] min-w-[196px] border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex flex-col overflow-y-auto">
       {/* Logo */}
-      <div className="px-[14px] py-[13px] pb-[10px] border-b border-gray-200 dark:border-gray-700">
+      <Link
+        to="/"
+        className="px-[14px] py-[13px] pb-[10px] border-b border-gray-200 dark:border-gray-700 block hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+      >
         <div className="text-[15px] font-medium text-gray-900 dark:text-white">DinnerMoney</div>
         <div className="text-[10px] text-gray-400 mt-[1px]">Retirement planner</div>
-      </div>
+      </Link>
 
       {/* Insights nav */}
       <div className="px-[10px] pt-[10px] pb-[3px] text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
