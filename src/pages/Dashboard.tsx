@@ -4,15 +4,17 @@ import { MetricCard } from '../components/ui/MetricCard'
 import { Card, CardTitle } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { PageHeader } from '../components/ui/PageHeader'
+import { Badge } from '../components/ui/Badge'
 import { formatCompact, formatCurrency } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend,
 } from 'recharts'
-import type { SimulationResult } from '../types'
+import type { SimulationResult, Expense, PensionEstimate, Windfall, UserProfile } from '../types'
 
-// Event pin data — built from store data
+// ─── Life event pins ──────────────────────────────────────────────────────────
+
 function useLifeEvents() {
   const { realEstateEvents, windfalls, pensions, profile } = useAppStore()
   const events: { year: number; label: string; color: string; emoji: string }[] = []
@@ -34,24 +36,27 @@ function useLifeEvents() {
       events.push({ year: startYear, label: p.label, color: '#0F6E56', emoji: p.currency === 'EUR' ? '€' : '$' })
     }
   }
-  // RMDs at 73
   const rmdYear = profile.birthYear + 73
   events.push({ year: rmdYear, label: 'RMDs start', color: '#7F77DD', emoji: 'R' })
   return events
 }
 
+// ─── Net worth chart ──────────────────────────────────────────────────────────
+
 function NetWorthChart({ result }: { result: SimulationResult }) {
-  const data = result.years.map((y, i) => ({
-    year: y,
-    age: `${y}`,
-    median: Math.max(0, Math.round(result.medianNetWorth[i])),
-    p10: Math.max(0, Math.round(result.p10NetWorth[i])),
-    p90: Math.max(0, Math.round(result.p90NetWorth[i])),
-    band: [Math.max(0, Math.round(result.p10NetWorth[i])), Math.max(0, Math.round(result.p90NetWorth[i]))] as [number, number],
-  }))
+  const data = result.years.map((y, i) => {
+    const p10 = Math.max(0, Math.round(result.p10NetWorth[i]))
+    const p90 = Math.max(0, Math.round(result.p90NetWorth[i]))
+    return {
+      year: y,
+      age: `${y}`,
+      median: Math.max(0, Math.round(result.medianNetWorth[i])),
+      bandBase: p10,
+      bandSize: Math.max(0, p90 - p10),
+    }
+  })
 
   const events = useLifeEvents()
-
   const fmt = (v: number) => formatCompact(v, 'EUR')
 
   return (
@@ -67,8 +72,9 @@ function NetWorthChart({ result }: { result: SimulationResult }) {
           <XAxis dataKey="age" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={4} />
           <YAxis tickFormatter={fmt} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={48} />
           <Tooltip formatter={(v: number) => formatCurrency(v, 'EUR')} labelFormatter={(l) => `Year ${l}`} />
-          <Area type="monotone" dataKey="p90" stroke="none" fill="url(#bandGrad)" />
-          <Area type="monotone" dataKey="p10" stroke="none" fill="white" fillOpacity={1} />
+          {/* Stacked band: transparent base (p10) + colored size (p90-p10) */}
+          <Area type="monotone" dataKey="bandBase" stackId="band" stroke="none" fill="transparent" legendType="none" />
+          <Area type="monotone" dataKey="bandSize" stackId="band" stroke="none" fill="url(#bandGrad)" legendType="none" />
           <Area type="monotone" dataKey="median" stroke="#378ADD" strokeWidth={2} fill="none" dot={false} />
         </AreaChart>
       </ResponsiveContainer>
@@ -85,6 +91,8 @@ function NetWorthChart({ result }: { result: SimulationResult }) {
     </div>
   )
 }
+
+// ─── Income vs expenses bar chart ─────────────────────────────────────────────
 
 function IncomeExpenseChart({ result }: { result: SimulationResult }) {
   const { expenses, pensions, profile } = useAppStore()
@@ -122,10 +130,160 @@ function IncomeExpenseChart({ result }: { result: SimulationResult }) {
   )
 }
 
+// ─── Upcoming item helpers ────────────────────────────────────────────────────
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+function toMonthLabel(year: number, month: number) {
+  return `${MONTH_NAMES[month - 1]} ${year}`
+}
+
+function toEUR(amount: number, currency: string): number {
+  return currency.toUpperCase() === 'USD' ? amount / DEFAULT_EUR_USD_RATE : amount
+}
+
+interface UpcomingItem {
+  key: string
+  date: string       // YYYY-MM for sorting
+  label: string
+  amount: number
+  currency: string
+  badge: 'recurring' | 'one_time' | 'projected' | 'windfall'
+}
+
+function buildUpcomingExpenses(
+  expenses: Expense[],
+  today: Date,
+  maxMonths = 3,
+  maxItems = 10,
+): UpcomingItem[] {
+  const items: UpcomingItem[] = []
+  const cy = today.getFullYear()
+  const cm = today.getMonth() + 1
+
+  for (let i = 0; i < maxMonths; i++) {
+    const totalM = cm + i
+    const year = cy + Math.floor((totalM - 1) / 12)
+    const month = ((totalM - 1) % 12) + 1
+
+    for (const exp of expenses) {
+      const startY = parseInt(exp.startDate.split('-')[0])
+      const startM = parseInt(exp.startDate.split('-')[1] ?? '1')
+      const endY = exp.endDate ? parseInt(exp.endDate.split('-')[0]) : null
+      const endM = exp.endDate ? parseInt(exp.endDate.split('-')[1] ?? '12') : null
+
+      const afterStart = year > startY || (year === startY && month >= startM)
+      const beforeEnd = endY === null || year < endY || (year === endY && month <= (endM ?? 12))
+      if (!afterStart || !beforeEnd) continue
+
+      const ym = `${year}-${String(month).padStart(2, '0')}`
+
+      if (exp.frequency === 'monthly') {
+        items.push({ key: `exp-${exp.id}-${ym}`, date: ym, label: exp.name, amount: exp.amount, currency: exp.currency, badge: 'recurring' })
+      } else if (exp.frequency === 'yearly' && month === startM) {
+        items.push({ key: `exp-${exp.id}-${year}`, date: ym, label: exp.name, amount: exp.amount, currency: exp.currency, badge: 'recurring' })
+      } else if (exp.frequency === 'one_time' && year === startY && month === startM) {
+        items.push({ key: `exp-${exp.id}-ot`, date: ym, label: exp.name, amount: exp.amount, currency: exp.currency, badge: 'one_time' })
+      }
+    }
+  }
+
+  return items.sort((a, b) => a.date.localeCompare(b.date)).slice(0, maxItems)
+}
+
+function buildUpcomingIncome(
+  pensions: PensionEstimate[],
+  windfalls: Windfall[],
+  profile: UserProfile,
+  today: Date,
+  maxMonths = 3,
+  maxItems = 10,
+): UpcomingItem[] {
+  const items: UpcomingItem[] = []
+  const cy = today.getFullYear()
+  const cm = today.getMonth() + 1
+
+  for (let i = 0; i < maxMonths; i++) {
+    const totalM = cm + i
+    const year = cy + Math.floor((totalM - 1) / 12)
+    const month = ((totalM - 1) % 12) + 1
+
+    for (const p of pensions) {
+      const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
+      const startYear = personBY + p.startAge
+      if (startYear > year) continue
+      const ym = `${year}-${String(month).padStart(2, '0')}`
+      items.push({ key: `pension-${p.id}-${ym}`, date: ym, label: p.label, amount: p.monthlyAmount, currency: p.currency, badge: 'projected' })
+    }
+  }
+
+  for (const w of windfalls) {
+    if (parseInt(w.date) === cy) {
+      items.push({ key: `windfall-${w.id}`, date: `${cy}-01`, label: w.name, amount: w.amount, currency: w.currency, badge: 'windfall' })
+    }
+  }
+
+  return items.sort((a, b) => a.date.localeCompare(b.date)).slice(0, maxItems)
+}
+
+// ─── Upcoming panel ───────────────────────────────────────────────────────────
+
+function UpcomingPanel({
+  title,
+  items,
+  colorClass,
+  sign,
+  emptyMsg,
+}: {
+  title: string
+  items: UpcomingItem[]
+  colorClass: string
+  sign: '+' | '−'
+  emptyMsg: string
+}) {
+  return (
+    <div>
+      <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-2">{title}</div>
+      <div className="space-y-0">
+        {items.length === 0 && (
+          <div className="text-[11px] text-gray-400 py-1">{emptyMsg}</div>
+        )}
+        {items.map(item => {
+          const [y, m] = item.date.split('-').map(Number)
+          const monthLabel = toMonthLabel(y, m)
+          return (
+            <div key={item.key} className="flex justify-between items-start py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0">
+              <div className="min-w-0">
+                <div className="text-[11.5px] text-gray-900 dark:text-white truncate">{item.label}</div>
+                <div className="flex items-center gap-1.5 mt-[1px]">
+                  <span className="text-[10px] text-gray-400">{monthLabel}</span>
+                  {item.badge === 'recurring' && <Badge variant="warning">Recurring</Badge>}
+                  {item.badge === 'one_time' && <Badge variant="neutral">One-time</Badge>}
+                  {item.badge === 'projected' && <Badge variant="purple">Projected</Badge>}
+                  {item.badge === 'windfall' && <Badge variant="purple">Windfall</Badge>}
+                </div>
+              </div>
+              <span className={`text-[11.5px] font-medium shrink-0 ml-2 ${colorClass}`}>
+                {sign}{formatCurrency(item.amount, item.currency)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      {items.length > 0 && (
+        <div className="text-[10px] text-gray-400 mt-2">
+          Total: {sign}{formatCurrency(items.reduce((s, i) => s + toEUR(i.amount, i.currency), 0), 'EUR')} EUR
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function Dashboard() {
   const { accounts, simulationResult, simulationRunning, setSimulationRunning, setSimulationResult, profile, expenses, pensions, windfalls, realEstateEvents, monteCarloConfig } = useAppStore()
 
-  // Compute current net worth
   const netWorth = accounts.reduce((sum, acc) => {
     return sum + convertToBase(acc.balance, acc.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
   }, 0)
@@ -150,7 +308,6 @@ export default function Dashboard() {
     }
   }
 
-  // Auto-run on first load if we have accounts
   useEffect(() => {
     if (accounts.length > 0 && !simulationResult && !simulationRunning) {
       runSimulation()
@@ -158,6 +315,9 @@ export default function Dashboard() {
   }, [accounts.length]) // eslint-disable-line
 
   const result = simulationResult
+  const today = new Date()
+  const upcomingExpenses = buildUpcomingExpenses(expenses, today, 3, 10)
+  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, profile, today, 3, 10)
 
   return (
     <div>
@@ -205,8 +365,8 @@ export default function Dashboard() {
           )}
         </Card>
 
-        {/* Income / Expense + Upcoming */}
-        <div className="grid grid-cols-[3fr_2fr] gap-3">
+        {/* Income / Expense chart + upcoming panels */}
+        <div className="grid grid-cols-[3fr_1fr_1fr] gap-3">
           <Card>
             <CardTitle>Income vs expenses (annual, {profile.baseCurrency})</CardTitle>
             {result ? (
@@ -219,27 +379,25 @@ export default function Dashboard() {
           </Card>
 
           <Card>
-            <CardTitle>Upcoming expenses</CardTitle>
-            <div className="space-y-0 text-[12px]">
-              {expenses.slice(0, 5).map((exp) => (
-                <div key={exp.id} className="flex justify-between items-start py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0">
-                  <div>
-                    <div className="text-gray-900 dark:text-white">{exp.name}</div>
-                    <div className="text-[10px] text-gray-400">{exp.frequency}</div>
-                  </div>
-                  <span className="text-red-500 font-medium">
-                    −{formatCurrency(exp.amount, exp.currency)}
-                  </span>
-                </div>
-              ))}
-              {expenses.length === 0 && (
-                <div className="text-gray-400 py-2">No expenses configured</div>
-              )}
-            </div>
+            <UpcomingPanel
+              title="Upcoming expenses (3 months)"
+              items={upcomingExpenses}
+              colorClass="text-red-500"
+              sign="−"
+              emptyMsg="No upcoming expenses"
+            />
+          </Card>
+
+          <Card>
+            <UpcomingPanel
+              title="Upcoming income (3 months)"
+              items={upcomingIncome}
+              colorClass="text-green-600"
+              sign="+"
+              emptyMsg="No upcoming income"
+            />
           </Card>
         </div>
-
-        {/* LM spending comparison — coming once transaction sync is implemented */}
       </div>
     </div>
   )

@@ -116,7 +116,7 @@ export default function Profile() {
                 <span>Country</span><span>Start</span><span>End</span><span>Status</span><span></span>
               </div>
             </TableHead>
-            {profile.residencyPeriods.map(r => (
+            {profile.residencyPeriods.slice().sort((a, b) => a.startDate.localeCompare(b.startDate)).map(r => (
               <TableRow key={r.id}>
                 <div className="grid grid-cols-[1fr_1fr_1fr_1fr_80px] gap-2 items-center">
                   <span>{r.country === 'FR' ? '🇫🇷 France' : '🇺🇸 USA'}</span>

@@ -14,6 +14,7 @@ import Expenses from './pages/config/Expenses'
 import Windfalls from './pages/config/Windfalls'
 import Simulation from './pages/config/Simulation'
 import Settings from './pages/config/Settings'
+import Health from './pages/config/Health'
 
 /** Redirects to /settings when no API key is configured yet */
 function OnboardingGate({ children }: { children: React.ReactNode }) {
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="/config/expenses" element={<Expenses />} />
           <Route path="/config/windfalls" element={<Windfalls />} />
           <Route path="/config/simulation" element={<Simulation />} />
+          <Route path="/config/health" element={<Health />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

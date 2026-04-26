@@ -23,28 +23,36 @@ export default function Accounts() {
       const { manual, synced } = await fetchAllAccounts(lmApiKey, lmProxyUrl)
       const now = new Date().toISOString()
       const mapped: Account[] = [
-        ...manual.filter(a => !a.closed_on).map(a => ({
-          id: a.id,
-          lmId: a.id,
-          name: a.display_name ?? a.name,
-          balance: parseFloat(a.balance),
-          currency: a.currency,
-          type: mapLMType(a.type_name),
-          allocation: { equity: 0, bonds: 0, cash: 100 },
-          syncedAt: now,
-          isManual: true,
-        })),
-        ...synced.map(a => ({
-          id: a.id,
-          lmId: a.id,
-          name: a.display_name ?? a.name,
-          balance: parseFloat(a.balance),
-          currency: a.currency,
-          type: mapLMType(a.subtype ?? a.type),
-          allocation: { equity: 0, bonds: 0, cash: 100 },
-          syncedAt: now,
-          isManual: false,
-        })),
+        ...manual.filter(a => !a.closed_on).map(a => {
+          const type = mapLMType(a.type_name)
+          const rawBalance = parseFloat(a.balance)
+          return {
+            id: a.id,
+            lmId: a.id,
+            name: a.display_name ?? a.name,
+            balance: type === 'loan' ? -rawBalance : rawBalance,
+            currency: a.currency,
+            type,
+            allocation: { equity: 0, bonds: 0, cash: 100 },
+            syncedAt: now,
+            isManual: true,
+          }
+        }),
+        ...synced.map(a => {
+          const type = mapLMType(a.subtype || a.type)
+          const rawBalance = parseFloat(a.balance)
+          return {
+            id: a.id,
+            lmId: a.id,
+            name: a.display_name ?? a.name,
+            balance: type === 'loan' ? -rawBalance : rawBalance,
+            currency: a.currency,
+            type,
+            allocation: { equity: 0, bonds: 0, cash: 100 },
+            syncedAt: now,
+            isManual: false,
+          }
+        }),
       ]
       // Preserve allocation for existing accounts
       const existing = new Map(accounts.map(a => [a.id, a]))

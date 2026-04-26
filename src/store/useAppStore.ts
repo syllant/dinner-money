@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import type {
   UserProfile, Account, PensionEstimate, RealEstateEvent,
   Expense, Windfall, MonteCarloConfig, TaxConfig, SimulationResult,
-  QuarterlyPayment,
+  QuarterlyPayment, MedicalCoverage, MedicalExpense,
 } from '../types'
 
 // ─── Default values ───────────────────────────────────────────────────────────
@@ -62,6 +62,8 @@ interface AppState {
   windfalls: Windfall[]
   monteCarloConfig: MonteCarloConfig
   taxConfig: TaxConfig
+  medicalCoverages: MedicalCoverage[]
+  medicalExpenses: MedicalExpense[]
   // Runtime (not persisted)
   simulationResult: SimulationResult | null
   simulationRunning: boolean
@@ -87,6 +89,10 @@ interface AppState {
   setTaxConfig: (patch: Partial<TaxConfig>) => void
   upsertQuarterlyPayment: (payment: QuarterlyPayment) => void
   upsertStatePayment: (payment: QuarterlyPayment) => void
+  upsertMedicalCoverage: (coverage: MedicalCoverage) => void
+  deleteMedicalCoverage: (id: string) => void
+  upsertMedicalExpense: (expense: MedicalExpense) => void
+  deleteMedicalExpense: (id: string) => void
   setSimulationResult: (result: SimulationResult | null) => void
   setSimulationRunning: (running: boolean) => void
 }
@@ -107,6 +113,8 @@ export const useAppStore = create<AppState>()(
       windfalls: [],
       monteCarloConfig: defaultMonteCarloConfig,
       taxConfig: defaultTaxConfig,
+      medicalCoverages: [],
+      medicalExpenses: [],
       simulationResult: null,
       simulationRunning: false,
 
@@ -196,6 +204,24 @@ export const useAppStore = create<AppState>()(
           },
         })),
 
+      upsertMedicalCoverage: (coverage) =>
+        set((s) => ({
+          medicalCoverages: s.medicalCoverages.some((c) => c.id === coverage.id)
+            ? s.medicalCoverages.map((c) => (c.id === coverage.id ? coverage : c))
+            : [...s.medicalCoverages, coverage],
+        })),
+      deleteMedicalCoverage: (id) =>
+        set((s) => ({ medicalCoverages: s.medicalCoverages.filter((c) => c.id !== id) })),
+
+      upsertMedicalExpense: (expense) =>
+        set((s) => ({
+          medicalExpenses: s.medicalExpenses.some((e) => e.id === expense.id)
+            ? s.medicalExpenses.map((e) => (e.id === expense.id ? expense : e))
+            : [...s.medicalExpenses, expense],
+        })),
+      deleteMedicalExpense: (id) =>
+        set((s) => ({ medicalExpenses: s.medicalExpenses.filter((e) => e.id !== id) })),
+
       setSimulationResult: (simulationResult) => set({ simulationResult }),
       setSimulationRunning: (simulationRunning) => set({ simulationRunning }),
     }),
@@ -217,6 +243,8 @@ export const useAppStore = create<AppState>()(
           // ensure stateQuarterlyPayments is always persisted even if missing from old data
           stateQuarterlyPayments: s.taxConfig.stateQuarterlyPayments ?? defaultQuarterlyPayments(new Date().getFullYear()),
         },
+        medicalCoverages: s.medicalCoverages,
+        medicalExpenses: s.medicalExpenses,
       }),
     }
   )

@@ -119,11 +119,14 @@ export interface MonteCarloConfig {
 
 // ─── Tax ──────────────────────────────────────────────────────────────────────
 
+export type PaymentStatus = 'paid' | 'todo' | 'none'
+
 export interface QuarterlyPayment {
   year: number
   quarter: 1 | 2 | 3 | 4
   amountPaid: number | null
   estimatedDue: number | null
+  status?: PaymentStatus
 }
 
 export interface TaxConfig {
@@ -134,6 +137,29 @@ export interface TaxConfig {
   quarterlyPayments: QuarterlyPayment[]
   /** California FTB quarterly estimated payments */
   stateQuarterlyPayments: QuarterlyPayment[]
+}
+
+// ─── Health ───────────────────────────────────────────────────────────────────
+
+export interface MedicalCoverage {
+  id: string
+  name: string
+  amount: number
+  frequency: ExpenseFrequency
+  currency: Currency
+  startDate: string      // YYYY-MM
+  endDate: string | null
+}
+
+export interface MedicalExpense {
+  id: string
+  name: string
+  amount: number
+  frequency: ExpenseFrequency
+  currency: Currency
+  startDate: string      // YYYY-MM
+  endDate: string | null
+  category: string
 }
 
 // ─── Simulation results (runtime, not persisted) ──────────────────────────────

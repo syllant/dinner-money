@@ -2,7 +2,7 @@ import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank, ArrowLeftRight,
   FileText, User, CreditCard, Clock, Home, Receipt,
-  Star, Activity, Settings,
+  Star, Activity, Settings, HeartPulse,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -28,6 +28,7 @@ const configItems: NavItem[] = [
   { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
   { to: '/config/windfalls', label: 'Windfalls', icon: <Star size={13} /> },
   { to: '/config/simulation', label: 'Simulation', icon: <Activity size={13} /> },
+  { to: '/config/health', label: 'Health', icon: <HeartPulse size={13} /> },
 ]
 
 function NavItem({ item }: { item: NavItem }) {
