@@ -45,6 +45,8 @@ export interface Account {
   syncedAt: string       // ISO timestamp
   isManual: boolean
   includedInPlanning?: boolean    // false to exclude from net worth / simulation (default true)
+  interestRate?: number  // % APY, for cash/loan accounts
+  dueDate?: number       // day of month (1–31), for credit accounts
 }
 
 // ─── Pensions ─────────────────────────────────────────────────────────────────

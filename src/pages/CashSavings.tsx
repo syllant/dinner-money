@@ -3,7 +3,6 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { MetricCard } from '../components/ui/MetricCard'
 import { Card, CardTitle } from '../components/ui/Card'
 import { Table, TableHead, TableRow } from '../components/ui/Table'
-import { Badge } from '../components/ui/Badge'
 import { Banner } from '../components/ui/Banner'
 import { formatCurrency, formatCompact } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE } from '../lib/currency'
@@ -40,21 +39,34 @@ function AccountTable({ accounts }: { accounts: Account[] }) {
   return (
     <Table>
       <TableHead>
-        <div className="grid grid-cols-[2fr_1fr_60px] gap-2">
-          <span>Account</span><span>Balance</span><span></span>
+        <div className="grid grid-cols-[2fr_1fr_1fr_1.2fr] gap-2">
+          <span>Account</span><span>Balance</span><span>Rate</span><span>Health</span>
         </div>
       </TableHead>
-      {accounts.length > 0 ? accounts.map(acc => (
-        <TableRow key={acc.id}>
-          <div className="grid grid-cols-[2fr_1fr_60px] gap-2 items-center">
-            <span className="font-medium truncate">{acc.name}</span>
-            <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-              {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
-            </span>
-            <Badge variant={acc.currency.toUpperCase() === 'EUR' ? 'eur' : 'usd'}>{acc.currency.toUpperCase()}</Badge>
-          </div>
-        </TableRow>
-      )) : (
+      {accounts.length > 0 ? accounts.map(acc => {
+        const rate = acc.interestRate ?? 0
+        const health: 'good' | 'warn' | 'bad' = rate >= 3 ? 'good' : rate >= 1 ? 'warn' : 'bad'
+        return (
+          <TableRow key={acc.id}>
+            <div className="grid grid-cols-[2fr_1fr_1fr_1.2fr] gap-2 items-center">
+              <span className="font-medium truncate">{acc.name}</span>
+              <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
+              </span>
+              <span className="text-[12px] text-gray-500">{rate > 0 ? `${rate}%` : '—'}</span>
+              <div className="flex items-center gap-2">
+                <div className="h-[4px] w-16 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
+                  <div className="h-full rounded-full" style={{
+                    width: `${Math.min(100, rate / 5 * 100)}%`,
+                    background: health === 'good' ? '#22c55e' : health === 'warn' ? '#f59e0b' : '#ef4444'
+                  }} />
+                </div>
+                <span className="text-[11px] text-gray-500">{health === 'good' ? 'Good' : health === 'warn' ? 'Low' : 'No yield'}</span>
+              </div>
+            </div>
+          </TableRow>
+        )
+      }) : (
         <TableRow>
           <div className="text-gray-400 text-[12px]">No accounts</div>
         </TableRow>
@@ -70,7 +82,7 @@ function CurrencyColumn({ currency, accounts, total, monthlyBurn }: {
   monthlyBurn: number
 }) {
   const runway = monthlyBurn > 0 ? total / monthlyBurn : 0
-  const zeroYield = accounts.filter(a => a.allocation.cash === 100)
+  const zeroYield = accounts.filter(a => (a.interestRate ?? 0) === 0)
   const zeroYieldAmount = zeroYield.reduce((s, a) => s + a.balance, 0)
   const hasZeroYieldWarning = currency === 'EUR' && total > 0 && zeroYieldAmount / total > 0.3
 
@@ -106,7 +118,8 @@ function CurrencyColumn({ currency, accounts, total, monthlyBurn }: {
 export default function CashSavings() {
   const { accounts, expenses, medicalCoverages, medicalExpenses } = useAppStore()
 
-  const cashAccounts = accounts.filter(a => a.type === 'cash')
+  // Only included cash accounts
+  const cashAccounts = accounts.filter(a => a.type === 'cash' && a.includedInPlanning !== false)
   const usdAccounts = cashAccounts.filter(a => a.currency.toUpperCase() === 'USD')
   const eurAccounts = cashAccounts.filter(a => a.currency.toUpperCase() === 'EUR')
 
@@ -123,7 +136,6 @@ export default function CashSavings() {
       <PageHeader title="Cash & savings" />
       <div className="p-4 space-y-5">
 
-        {/* Consolidated top */}
         <Card>
           <CardTitle>Total liquidity (consolidated)</CardTitle>
           <div className="grid grid-cols-3 gap-3">
@@ -143,20 +155,9 @@ export default function CashSavings() {
           </div>
         </Card>
 
-        {/* Per-currency columns */}
         <div className="grid grid-cols-2 gap-5">
-          <CurrencyColumn
-            currency="USD"
-            accounts={usdAccounts}
-            total={usdCash}
-            monthlyBurn={monthlyBurnUSD}
-          />
-          <CurrencyColumn
-            currency="EUR"
-            accounts={eurAccounts}
-            total={eurCash}
-            monthlyBurn={monthlyBurnEUR}
-          />
+          <CurrencyColumn currency="USD" accounts={usdAccounts} total={usdCash} monthlyBurn={monthlyBurnUSD} />
+          <CurrencyColumn currency="EUR" accounts={eurAccounts} total={eurCash} monthlyBurn={monthlyBurnEUR} />
         </div>
 
       </div>
