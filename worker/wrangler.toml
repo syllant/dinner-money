@@ -4,3 +4,16 @@ compatibility_date = "2024-01-01"
 
 [placement]
 mode = "smart"
+
+# Optional: set PLAID_ENV to "sandbox", "development", or "production" (default: "production")
+# Uncomment and change value here, or set as a secret for each environment.
+# [vars]
+# PLAID_ENV = "production"
+
+# Required secrets — set once per environment via CLI:
+#   wrangler secret put PLAID_CLIENT_ID
+#   wrangler secret put PLAID_SECRET
+#
+# Each Plaid environment (sandbox / development / production) has its own secret.
+# Make sure PLAID_SECRET matches PLAID_ENV.
+# Verify with: curl https://<worker-url>/plaid/ping
