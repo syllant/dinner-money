@@ -27,8 +27,7 @@ export default function Accounts() {
           const type = mapLMType(a.type_name)
           const rawBalance = parseFloat(a.balance)
           return {
-            id: a.id,
-            lmId: a.id,
+            id: a.id, lmId: a.id,
             name: a.display_name ?? a.name,
             balance: type === 'loan' ? -rawBalance : rawBalance,
             currency: a.currency,
@@ -42,8 +41,7 @@ export default function Accounts() {
           const type = mapLMType(a.subtype || a.type)
           const rawBalance = parseFloat(a.balance)
           return {
-            id: a.id,
-            lmId: a.id,
+            id: a.id, lmId: a.id,
             name: a.display_name ?? a.name,
             balance: type === 'loan' ? -rawBalance : rawBalance,
             currency: a.currency,
@@ -54,9 +52,18 @@ export default function Accounts() {
           }
         }),
       ]
-      // Preserve allocation for existing accounts
+      // On re-sync: preserve allocation always; preserve type only if user explicitly overrode it
       const existing = new Map(accounts.map(a => [a.id, a]))
-      const merged = mapped.map(a => existing.has(a.id) ? { ...a, allocation: existing.get(a.id)!.allocation, type: existing.get(a.id)!.type } : a)
+      const merged = mapped.map(a => {
+        const ex = existing.get(a.id)
+        if (!ex) return a
+        return {
+          ...a,
+          allocation: ex.allocation,
+          includedInPlanning: ex.includedInPlanning,
+          ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}),
+        }
+      })
       setAccounts(merged)
     } catch (err) {
       if (err instanceof LunchMoneyError) {
@@ -90,7 +97,13 @@ export default function Accounts() {
   function updateType(id: number, type: Account['type']) {
     const acc = accounts.find(a => a.id === id)
     if (!acc) return
-    upsertAccount({ ...acc, type })
+    upsertAccount({ ...acc, type, typeOverridden: true })
+  }
+
+  function toggleIncluded(id: number) {
+    const acc = accounts.find(a => a.id === id)
+    if (!acc) return
+    upsertAccount({ ...acc, includedInPlanning: acc.includedInPlanning === false ? true : false })
   }
 
   const syncedAt = accounts[0]?.syncedAt
@@ -100,17 +113,16 @@ export default function Accounts() {
   return (
     <div>
       <PageHeader title="Accounts">
-        <Button variant="success" onClick={syncFromLM} disabled={syncing}>
-          {syncing ? 'Syncing…' : 'Sync from LunchMoney'}
-        </Button>
+        <div className="flex items-center gap-3">
+          {syncedAt && (
+            <span className="text-[11px] text-gray-400">Synced {syncedAt}</span>
+          )}
+          <Button variant="success" onClick={syncFromLM} disabled={syncing}>
+            {syncing ? 'Syncing…' : 'Sync from LunchMoney'}
+          </Button>
+        </div>
       </PageHeader>
       <div className="p-4 space-y-3">
-        {syncedAt && (
-          <Banner variant="info" className="flex justify-between">
-            <span>Last synced {syncedAt} · {accounts.length} accounts</span>
-            <button onClick={syncFromLM} className="underline font-medium cursor-pointer">Re-sync</button>
-          </Banner>
-        )}
         {!lmApiKey && (
           <Banner variant="warning">
             No LunchMoney API key — <a href="#/settings" className="underline font-medium">add one in Settings</a> to sync accounts.
@@ -128,58 +140,73 @@ export default function Accounts() {
 
         <Table>
           <TableHead>
-            <div className="grid grid-cols-[2fr_1fr_1fr_1.5fr_1fr_60px] gap-2">
+            <div className="grid grid-cols-[24px_2fr_1fr_1fr_1.5fr_1fr_60px] gap-2">
+              <span></span>
               <span>Account</span><span>Balance</span><span>Currency</span>
               <span>Asset allocation</span><span>Type</span><span></span>
             </div>
           </TableHead>
-          {accounts.map(acc => (
-            <TableRow key={acc.id}>
-              <div className="grid grid-cols-[2fr_1fr_1fr_1.5fr_1fr_60px] gap-2 items-center">
-                <span className="font-medium truncate">{acc.name}</span>
-                <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                  {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
-                </span>
-                <span><Badge variant={acc.currency.toUpperCase() === 'EUR' ? 'eur' : 'usd'}>{acc.currency.toUpperCase()}</Badge></span>
-                {editingId === acc.id ? (
-                  <div className="flex gap-1 text-[11px]">
-                    <label>Eq%<input type="number" min={0} max={100} className="w-12 border rounded px-1 ml-1"
-                      value={acc.allocation.equity} onChange={e => updateAllocation(acc.id, 'equity', +e.target.value)} /></label>
-                    <label>Bd%<input type="number" min={0} max={100} className="w-12 border rounded px-1 ml-1"
-                      value={acc.allocation.bonds} onChange={e => updateAllocation(acc.id, 'bonds', +e.target.value)} /></label>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="text-[11px] text-gray-500">{acc.allocation.equity}% eq / {acc.allocation.bonds}% bonds / {acc.allocation.cash}% cash</div>
-                    <div className="h-[4px] rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden mt-1">
-                      <div className="h-full rounded-full bg-green-500" style={{ width: `${acc.allocation.equity}%` }} />
+          {accounts.map(acc => {
+            const included = acc.includedInPlanning !== false
+            return (
+              <TableRow key={acc.id}>
+                <div className={`grid grid-cols-[24px_2fr_1fr_1fr_1.5fr_1fr_60px] gap-2 items-center ${!included ? 'opacity-40' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={included}
+                    onChange={() => toggleIncluded(acc.id)}
+                    title="Include in planning"
+                    className="cursor-pointer"
+                  />
+                  <span className="font-medium truncate">{acc.name}</span>
+                  <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                    {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
+                  </span>
+                  <span><Badge variant={acc.currency.toUpperCase() === 'EUR' ? 'eur' : 'usd'}>{acc.currency.toUpperCase()}</Badge></span>
+                  {editingId === acc.id ? (
+                    <div className="flex gap-1 text-[11px]">
+                      <label>Eq%<input type="number" min={0} max={100} className="w-12 border rounded px-1 ml-1"
+                        value={acc.allocation.equity} onChange={e => updateAllocation(acc.id, 'equity', +e.target.value)} /></label>
+                      <label>Bd%<input type="number" min={0} max={100} className="w-12 border rounded px-1 ml-1"
+                        value={acc.allocation.bonds} onChange={e => updateAllocation(acc.id, 'bonds', +e.target.value)} /></label>
                     </div>
+                  ) : (
+                    <div>
+                      <div className="text-[11px] text-gray-500">{acc.allocation.equity}% eq / {acc.allocation.bonds}% bonds / {acc.allocation.cash}% cash</div>
+                      <div className="h-[4px] rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden mt-1">
+                        <div className="h-full rounded-full bg-green-500" style={{ width: `${acc.allocation.equity}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <select
+                      className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1 bg-white dark:bg-gray-800"
+                      value={acc.type}
+                      onChange={e => updateType(acc.id, e.target.value as Account['type'])}
+                    >
+                      <option value="investment">Investment</option>
+                      <option value="retirement">Retirement</option>
+                      <option value="cash">Cash</option>
+                      <option value="real_estate">Real estate</option>
+                      <option value="loan">Loan / Mortgage</option>
+                      <option value="credit">Credit card</option>
+                      <option value="other">Other</option>
+                    </select>
+                    {acc.typeOverridden && <span title="Type manually set">✎</span>}
                   </div>
-                )}
-                <select
-                  className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1 bg-white dark:bg-gray-800"
-                  value={acc.type}
-                  onChange={e => updateType(acc.id, e.target.value as Account['type'])}
-                >
-                  <option value="investment">Investment</option>
-                  <option value="retirement">Retirement</option>
-                  <option value="cash">Cash</option>
-                  <option value="real_estate">Real estate</option>
-                  <option value="loan">Loan / Mortgage</option>
-                  <option value="credit">Credit card</option>
-                  <option value="other">Other</option>
-                </select>
-                <button
-                  className="text-[11px] text-blue-600 hover:underline cursor-pointer"
-                  onClick={() => setEditingId(editingId === acc.id ? null : acc.id)}
-                >
-                  {editingId === acc.id ? 'Done' : 'Edit'}
-                </button>
-              </div>
-            </TableRow>
-          ))}
+                  <button
+                    className="text-[11px] text-blue-600 hover:underline cursor-pointer"
+                    onClick={() => setEditingId(editingId === acc.id ? null : acc.id)}
+                  >
+                    {editingId === acc.id ? 'Done' : 'Edit'}
+                  </button>
+                </div>
+              </TableRow>
+            )
+          })}
           <TableAddRow>+ Add manual account</TableAddRow>
         </Table>
+        <p className="text-[11px] text-gray-400">Check/uncheck accounts to include or exclude them from planning and simulation.</p>
       </div>
     </div>
   )

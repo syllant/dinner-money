@@ -129,8 +129,9 @@ export function mapLMType(typeName: string): import('../types').AccountType {
   // Retirement / tax-advantaged
   if (t.includes('401') || t.includes('ira') || t.includes('roth') ||
       t.includes('retirement') || t.includes('pension') || t.includes('403')) return 'retirement'
-  // Investment / brokerage
-  if (t.includes('investment') || t.includes('brokerage')) return 'investment'
+  // Investment / brokerage / employee stock plans
+  if (t.includes('investment') || t.includes('brokerage') ||
+      t.includes('employee') || t.includes('compensation') || t.includes('rsu')) return 'investment'
   // Loans / debts
   if (t.includes('loan') || t.includes('mortgage') || t.includes('student') ||
       t.includes('vehicle') || t.includes('auto') || t.includes('home equity')) return 'loan'

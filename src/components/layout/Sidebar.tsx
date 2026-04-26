@@ -1,10 +1,14 @@
+import { useState } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank, ArrowLeftRight,
   FileText, User, CreditCard, Clock, Home, Receipt,
-  Star, Activity, Settings, HeartPulse,
+  Star, Activity, Settings, RefreshCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useAppStore } from '../../store/useAppStore'
+import { fetchAllAccounts, mapLMType, LunchMoneyError } from '../../lib/lunchmoney'
+import type { Account } from '../../types'
 
 interface NavItem {
   to: string
@@ -28,10 +32,9 @@ const configItems: NavItem[] = [
   { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
   { to: '/config/windfalls', label: 'Windfalls', icon: <Star size={13} /> },
   { to: '/config/simulation', label: 'Simulation', icon: <Activity size={13} /> },
-  { to: '/config/health', label: 'Health', icon: <HeartPulse size={13} /> },
 ]
 
-function NavItem({ item }: { item: NavItem }) {
+function SidebarNavItem({ item }: { item: NavItem }) {
   const location = useLocation()
   const isActive = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
 
@@ -48,6 +51,74 @@ function NavItem({ item }: { item: NavItem }) {
       <span className="opacity-65 flex-shrink-0">{item.icon}</span>
       {item.label}
     </NavLink>
+  )
+}
+
+function SyncStatus() {
+  const { lmApiKey, lmProxyUrl, accounts, setAccounts } = useAppStore()
+  const [syncing, setSyncing] = useState(false)
+
+  const syncedAt = accounts[0]?.syncedAt
+
+  async function sync() {
+    if (!lmApiKey || syncing) return
+    setSyncing(true)
+    try {
+      const { manual, synced } = await fetchAllAccounts(lmApiKey, lmProxyUrl)
+      const now = new Date().toISOString()
+      const mapped: Account[] = [
+        ...manual.filter(a => !a.closed_on).map(a => {
+          const type = mapLMType(a.type_name)
+          const rawBalance = parseFloat(a.balance)
+          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: type === 'loan' ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: true }
+        }),
+        ...synced.map(a => {
+          const type = mapLMType(a.subtype || a.type)
+          const rawBalance = parseFloat(a.balance)
+          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: type === 'loan' ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: false }
+        }),
+      ]
+      const existing = new Map(accounts.map(a => [a.id, a]))
+      const merged = mapped.map(a => {
+        const ex = existing.get(a.id)
+        if (!ex) return a
+        return { ...a, allocation: ex.allocation, includedInPlanning: ex.includedInPlanning, ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}) }
+      })
+      setAccounts(merged)
+    } catch (_) {
+      // silently fail — user can see details in Accounts page
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  if (!lmApiKey) return null
+
+  const timeStr = syncedAt
+    ? new Date(syncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null
+  const dateStr = syncedAt
+    ? new Date(syncedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
+    : null
+
+  return (
+    <div className="mx-[14px] mb-2 flex items-center justify-between gap-1">
+      <div className="text-[10px] text-gray-400 leading-tight">
+        {syncedAt ? (
+          <><span className="block">{dateStr} {timeStr}</span><span className="block">{accounts.length} accounts</span></>
+        ) : (
+          <span>Not synced</span>
+        )}
+      </div>
+      <button
+        onClick={sync}
+        disabled={syncing}
+        title="Refresh accounts from LunchMoney"
+        className="p-[5px] rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-40"
+      >
+        <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
+      </button>
+    </div>
   )
 }
 
@@ -68,7 +139,7 @@ export function Sidebar() {
         Insights
       </div>
       {insightItems.map((item) => (
-        <NavItem key={item.to} item={item} />
+        <SidebarNavItem key={item.to} item={item} />
       ))}
 
       {/* Config nav */}
@@ -76,13 +147,16 @@ export function Sidebar() {
         Configuration
       </div>
       {configItems.map((item) => (
-        <NavItem key={item.to} item={item} />
+        <SidebarNavItem key={item.to} item={item} />
       ))}
 
       <div className="flex-1" />
 
+      {/* Sync status */}
+      <SyncStatus />
+
       {/* Settings */}
-      <NavItem item={{ to: '/settings', label: 'Settings', icon: <Settings size={13} /> }} />
+      <SidebarNavItem item={{ to: '/settings', label: 'Settings', icon: <Settings size={13} /> }} />
       <div className="h-[8px]" />
     </div>
   )

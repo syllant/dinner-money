@@ -49,13 +49,21 @@ function buildItems(
   store: ReturnType<typeof useAppStore.getState>,
   year: number,
 ): LineItem[] {
-  const { expenses, pensions, windfalls, taxConfig, profile } = store
+  const { expenses, medicalCoverages, medicalExpenses, pensions, windfalls, taxConfig, profile } = store
   const items: LineItem[] = []
   const now = new Date()
   const currentYear = now.getFullYear()
   const currentMonth = now.getMonth() + 1 // 1–12
 
   const isCurrentYear = year === currentYear
+
+  // Combine all expense-like lists into a unified stream
+  type ExpLike = { id: string; name: string; amount: number; frequency: string; currency: string; startDate: string; endDate: string | null; category: string }
+  const allExpenses: ExpLike[] = [
+    ...expenses,
+    ...(medicalCoverages ?? []).map(c => ({ ...c, category: 'Medical coverage' })),
+    ...(medicalExpenses ?? []).map(e => ({ ...e, category: e.category || 'Medical' })),
+  ]
 
   // ── Pensions (income) ──────────────────────────────────────────────────────
   for (const p of pensions) {
@@ -86,8 +94,8 @@ function buildItems(
     }
   }
 
-  // ── Expenses ───────────────────────────────────────────────────────────────
-  for (const exp of expenses) {
+  // ── Expenses (including medical coverage + medical expenses) ──────────────
+  for (const exp of allExpenses) {
     const startY = parseInt(exp.startDate.split('-')[0])
     const startM = parseInt(exp.startDate.split('-')[1] ?? '1')
     const endY = exp.endDate ? parseInt(exp.endDate.split('-')[0]) : null
@@ -263,8 +271,8 @@ export default function IncomeExpenses() {
   const currentYear = new Date().getFullYear()
   const [year, setYear] = useState(currentYear)
 
-  const { expenses, pensions, windfalls, taxConfig, profile } = store
-  const reactiveItems = buildItems({ expenses, pensions, windfalls, taxConfig, profile } as ReturnType<typeof useAppStore.getState>, year)
+  const { expenses, medicalCoverages, medicalExpenses, pensions, windfalls, taxConfig, profile } = store
+  const reactiveItems = buildItems({ expenses, medicalCoverages, medicalExpenses, pensions, windfalls, taxConfig, profile } as ReturnType<typeof useAppStore.getState>, year)
 
   const incomeItems = reactiveItems.filter(i => i.kind === 'income')
   const expenseItems = reactiveItems.filter(i => i.kind === 'expense')

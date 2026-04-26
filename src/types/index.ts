@@ -40,9 +40,11 @@ export interface Account {
   balance: number
   currency: string       // ISO 4217, e.g. "usd", "eur"
   type: AccountType
+  typeOverridden?: boolean        // true when user manually set the type (preserved on re-sync)
   allocation: AssetAllocation
   syncedAt: string       // ISO timestamp
   isManual: boolean
+  includedInPlanning?: boolean    // false to exclude from net worth / simulation (default true)
 }
 
 // ─── Pensions ─────────────────────────────────────────────────────────────────
