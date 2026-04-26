@@ -7,7 +7,7 @@ import { Banner } from '../../components/ui/Banner'
 import { fetchCurrentUser, LunchMoneyError } from '../../lib/lunchmoney'
 
 export default function Settings() {
-  const { lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, taxConfig, setTaxConfig } = useAppStore()
+  const { lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, taxConfig, setTaxConfig, profile, setProfile } = useAppStore()
   const [keyInput, setKeyInput] = useState(lmApiKey ?? '')
   const [proxyInput, setProxyInput] = useState(lmProxyUrl ?? '')
   const [testing, setTesting] = useState(false)
@@ -200,6 +200,24 @@ export default function Settings() {
           {lmProxyUrl && (
             <div className="mt-1 text-[11px] text-green-600">✓ Proxy set: {lmProxyUrl}</div>
           )}
+        </section>
+
+        <hr className="border-gray-200 dark:border-gray-700" />
+
+        {/* Display currency */}
+        <section>
+          <h2 className="text-[13px] font-medium mb-2">Display currency</h2>
+          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
+            Base currency used for net worth, projections, and dashboard totals.
+          </p>
+          <select
+            className="h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            value={profile.baseCurrency}
+            onChange={e => setProfile({ baseCurrency: e.target.value as 'USD' | 'EUR' })}
+          >
+            <option value="EUR">EUR (€)</option>
+            <option value="USD">USD ($)</option>
+          </select>
         </section>
 
         <hr className="border-gray-200 dark:border-gray-700" />

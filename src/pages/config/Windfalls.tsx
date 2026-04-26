@@ -14,7 +14,7 @@ const TAX_LABELS: Record<TaxTreatment, string> = {
 }
 
 const blank = (): Windfall => ({
-  id: generateId(), name: '', date: '2027', amount: 0,
+  id: generateId(), name: '', date: '2027-01', amount: 0,
   currency: 'USD', taxTreatment: 'CAPITAL_GAINS_LT', notes: '',
 })
 
@@ -32,9 +32,9 @@ export default function Windfalls() {
               <div className="flex flex-col gap-1 col-span-2"><label className="text-[11px] text-gray-500">Name</label>
                 <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800" value={editing.name}
                   onChange={e => setEditing({ ...editing, name: e.target.value })} /></div>
-              <div className="flex flex-col gap-1"><label className="text-[11px] text-gray-500">Year</label>
+              <div className="flex flex-col gap-1"><label className="text-[11px] text-gray-500">Date (YYYY-MM)</label>
                 <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800" value={editing.date}
-                  onChange={e => setEditing({ ...editing, date: e.target.value })} /></div>
+                  onChange={e => setEditing({ ...editing, date: e.target.value })} placeholder="2027-01" /></div>
               <div className="flex flex-col gap-1"><label className="text-[11px] text-gray-500">Amount</label>
                 <input type="number" className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800" value={editing.amount}
                   onChange={e => setEditing({ ...editing, amount: parseFloat(e.target.value) })} /></div>
@@ -60,7 +60,7 @@ export default function Windfalls() {
         <Table>
           <TableHead>
             <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1.5fr_60px] gap-2">
-              <span>Name</span><span>Year</span><span>Amount</span><span>Currency</span><span>Tax treatment</span><span></span>
+              <span>Name</span><span>Date</span><span>Amount</span><span>Currency</span><span>Tax treatment</span><span></span>
             </div>
           </TableHead>
           {windfalls.map(w => (

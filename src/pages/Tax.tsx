@@ -44,11 +44,10 @@ function QuarterlyTable({
   return (
     <Table>
       <TableHead>
-        <div className="grid grid-cols-[1fr_60px_80px_80px_70px] gap-2 text-[10.5px]">
+        <div className="grid grid-cols-[1fr_60px_100px_70px] gap-2 text-[10.5px]">
           <span>Quarter</span>
           <span>Due</span>
-          <span>Paid ({currency})</span>
-          <span>Est. ({currency})</span>
+          <span>Amount ({currency})</span>
           <span>Status</span>
         </div>
       </TableHead>
@@ -58,19 +57,12 @@ function QuarterlyTable({
         const status = q.status ?? 'none'
         return (
           <TableRow key={q.quarter}>
-            <div className="grid grid-cols-[1fr_60px_80px_80px_70px] gap-2 items-center">
+            <div className="grid grid-cols-[1fr_60px_100px_70px] gap-2 items-center">
               <div>
                 <span className="text-[11.5px]">Q{q.quarter} {q.year}</span>
                 {pct && <span className="text-[10px] text-gray-400 ml-1">({pct})</span>}
               </div>
               <span className="text-gray-500 text-[10.5px]">{due}</span>
-              <input
-                type="number"
-                className="h-[26px] w-full border border-gray-300 dark:border-gray-600 rounded px-2 text-[11px] bg-white dark:bg-gray-800"
-                value={q.amountPaid ?? ''}
-                placeholder="—"
-                onChange={e => onUpdate({ ...q, amountPaid: e.target.value ? parseFloat(e.target.value) : null })}
-              />
               <input
                 type="number"
                 className="h-[26px] w-full border border-gray-300 dark:border-gray-600 rounded px-2 text-[11px] bg-white dark:bg-gray-800"
@@ -85,7 +77,7 @@ function QuarterlyTable({
               >
                 <option value="none">—</option>
                 <option value="paid">Paid</option>
-                <option value="todo">To do</option>
+                <option value="todo">Due</option>
               </select>
             </div>
           </TableRow>
@@ -105,18 +97,12 @@ export default function Tax() {
   const frRate = taxConfig.frCombinedEffectiveRate / 100
   const currentYear = new Date().getFullYear()
 
-  const fedPaid = taxConfig.quarterlyPayments
-    .filter(p => p.year === currentYear && p.amountPaid != null)
-    .reduce((s, p) => s + (p.amountPaid ?? 0), 0)
   const fedEst = taxConfig.quarterlyPayments
     .filter(p => p.year === currentYear)
     .reduce((s, p) => s + (p.estimatedDue ?? 0), 0)
   const stateEst = (taxConfig.stateQuarterlyPayments ?? [])
     .filter(p => p.year === currentYear)
     .reduce((s, p) => s + (p.estimatedDue ?? 0), 0)
-  const statePaid = (taxConfig.stateQuarterlyPayments ?? [])
-    .filter(p => p.year === currentYear && p.amountPaid != null)
-    .reduce((s, p) => s + (p.amountPaid ?? 0), 0)
 
   const usTotalEst = fedEst + stateEst
   const frPartialEst = fedEst > 0 ? (fedEst / fedRate) * frRate * (2 / 12) / DEFAULT_EUR_USD_RATE : 0
@@ -147,12 +133,10 @@ export default function Tax() {
             <div className="pr-5">
               <div className="text-[10.5px] text-gray-500 mb-1">🇺🇸 Federal (IRS)</div>
               <div className="text-[15px] font-medium">{formatCurrency(fedEst, 'USD')}</div>
-              <div className="text-[10px] text-gray-400">{formatCurrency(fedPaid, 'USD')} paid</div>
             </div>
             <div className="px-5">
               <div className="text-[10.5px] text-gray-500 mb-1">🇺🇸 California (FTB)</div>
               <div className="text-[15px] font-medium">{formatCurrency(stateEst, 'USD')}</div>
-              <div className="text-[10px] text-gray-400">{formatCurrency(statePaid, 'USD')} paid</div>
             </div>
             <div className="px-5">
               <div className="text-[10.5px] text-gray-500 mb-1">🇫🇷 France (partial year)</div>
@@ -174,7 +158,7 @@ export default function Tax() {
             <MetricCard
               label="Federal effective rate"
               value={`${taxConfig.usFederalEffectiveRate}%`}
-              sub={`~${formatCurrency(fedEst, 'USD')} est. · ${formatCurrency(fedPaid, 'USD')} paid`}
+              sub={`~${formatCurrency(fedEst, 'USD')} estimated`}
             />
             <h3 className="text-[12px] font-medium pt-1">Quarterly payments</h3>
             <QuarterlyTable
@@ -193,10 +177,9 @@ export default function Tax() {
             <MetricCard
               label="California effective rate"
               value={`${taxConfig.usCaliforniaEffectiveRate}%`}
-              sub={`~${formatCurrency(stateEst, 'USD')} est. · ${formatCurrency(statePaid, 'USD')} paid`}
+              sub={`~${formatCurrency(stateEst, 'USD')} estimated`}
             />
             <h3 className="text-[12px] font-medium pt-1">Quarterly payments</h3>
-            <p className="text-[10.5px] text-gray-400 -mt-1">FTB schedule: 30% Q1 · 40% Q2 · 30% Q4 (no Q3)</p>
             <QuarterlyTable
               payments={statePayments}
               onUpdate={upsertStatePayment}

@@ -6,19 +6,31 @@ import { Badge } from '../../components/ui/Badge'
 import { formatCurrency, generateId } from '../../lib/format'
 import type { Expense, MedicalCoverage, MedicalExpense } from '../../types'
 
+const EXPENSE_CATEGORIES = ['Living', 'Housing', 'Food', 'Transport', 'Education', 'Travel', 'Entertainment', 'Medical', 'Other']
+
 // ─── Shared row layout ────────────────────────────────────────────────────────
 
-function ExpenseRow({ name, amount, currency, frequency, startDate, endDate, onEdit, onDelete }: {
+function ExpenseRow({ name, amount, currency, frequency, startDate, endDate, category, onEdit, onDelete }: {
   name: string; amount: number; currency: string; frequency: string
   startDate: string; endDate: string | null
+  category?: string
   onEdit: () => void; onDelete: () => void
 }) {
   return (
     <TableRow>
       <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_60px] gap-2 items-center">
-        <span className="font-medium">{name}</span>
+        <div>
+          <div className="font-medium">{name}</div>
+          {category && <div className="text-[10px] text-gray-400">{category}</div>}
+        </div>
         <span>{formatCurrency(amount, currency)}</span>
-        <span className="capitalize text-gray-500">{frequency.replace('_', '-')}</span>
+        <span>
+          {frequency === 'monthly'
+            ? <Badge variant="warning">Monthly</Badge>
+            : frequency === 'yearly'
+            ? <Badge variant="warning">Yearly</Badge>
+            : <span className="text-[11px] text-gray-300 dark:text-gray-600">—</span>}
+        </span>
         <Badge variant={currency === 'EUR' ? 'eur' : 'usd'}>{currency}</Badge>
         <span className="text-[11px] text-gray-400">{endDate ? `${startDate} → ${endDate}` : `${startDate} →`}</span>
         <div className="flex gap-2">
@@ -49,14 +61,14 @@ interface EditFields {
 }
 
 function EditForm<T extends EditFields>({
-  editing, title,
-  onChange, onSave, onCancel,
+  editing, title, onChange, onSave, onCancel, children,
 }: {
   editing: T
   title: string
   onChange: (patch: Partial<T>) => void
   onSave: () => void
   onCancel: () => void
+  children?: React.ReactNode
 }) {
   return (
     <div className="border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-3">
@@ -96,6 +108,7 @@ function EditForm<T extends EditFields>({
           <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
             value={editing.endDate ?? ''} onChange={e => onChange({ endDate: e.target.value || null } as Partial<T>)} placeholder="ongoing" />
         </div>
+        {children}
       </div>
       <div className="flex gap-2">
         <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50" onClick={onCancel}>Cancel</button>
@@ -210,13 +223,25 @@ function OtherExpensesSection() {
           onChange={patch => setEditing(e => e ? { ...e, ...patch } : e)}
           onSave={() => { upsertExpense(editing); setEditing(null) }}
           onCancel={() => setEditing(null)}
-        />
+        >
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-gray-500">Category</label>
+            <select
+              className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+              value={editing.category ?? 'Living'}
+              onChange={e => setEditing(ed => ed ? { ...ed, category: e.target.value } : ed)}
+            >
+              {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </EditForm>
       )}
       <Table>
         <TableColumns />
         {expenses.map(e => (
           <ExpenseRow key={e.id} name={e.name} amount={e.amount} currency={e.currency}
             frequency={e.frequency} startDate={e.startDate} endDate={e.endDate}
+            category={e.category}
             onEdit={() => setEditing(e)} onDelete={() => deleteExpense(e.id)} />
         ))}
         <TableAddRow onClick={() => setEditing(blankExpense())}>+ Add expense</TableAddRow>

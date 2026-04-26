@@ -9,7 +9,7 @@ import { formatCompact, formatCurrency } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
-  BarChart, Bar, Legend,
+  BarChart, Bar, Legend, Cell, ReferenceArea,
 } from 'recharts'
 import type { SimulationResult, Expense, PensionEstimate, Windfall, UserProfile, MedicalCoverage, MedicalExpense } from '../types'
 
@@ -83,7 +83,6 @@ function NetWorthChart({ result }: { result: SimulationResult }) {
           <XAxis dataKey="age" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={4} />
           <YAxis tickFormatter={fmt} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={48} />
           <Tooltip content={<NetWorthTooltip />} />
-          {/* Life event reference lines */}
           {events.map(ev => (
             <ReferenceLine
               key={`${ev.year}-${ev.label}`}
@@ -94,7 +93,6 @@ function NetWorthChart({ result }: { result: SimulationResult }) {
               label={{ value: ev.emoji, position: 'top', fontSize: 10, fill: ev.color }}
             />
           ))}
-          {/* Stacked p10-p90 band */}
           <Area type="monotone" dataKey="bandBase" stackId="band" stroke="none" fill="transparent" legendType="none" />
           <Area type="monotone" dataKey="bandSize" stackId="band" stroke="none" fill="url(#bandGrad)" legendType="none" />
           <Area type="monotone" dataKey="median" stroke="#378ADD" strokeWidth={2} fill="none" dot={false} />
@@ -104,7 +102,7 @@ function NetWorthChart({ result }: { result: SimulationResult }) {
   )
 }
 
-// ─── Expense helpers (shared with both charts) ────────────────────────────────
+// ─── Expense helpers ──────────────────────────────────────────────────────────
 
 function toEUR(amount: number, currency: string): number {
   return currency.toUpperCase() === 'USD' ? amount / DEFAULT_EUR_USD_RATE : amount
@@ -120,18 +118,54 @@ function allExpensesOf(
   return [...expenses, ...(medicalCoverages ?? []), ...(medicalExpenses ?? [])]
 }
 
-// ─── Annual I/E chart (full retirement horizon) ───────────────────────────────
+// ─── Annual I/E chart ─────────────────────────────────────────────────────────
 
-function AnnualIETooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey: string; value: number; name: string }>; label?: string }) {
+interface AnnualItem { label: string; amount: number; currency: string }
+
+interface AnnualPoint {
+  year: number
+  income: number
+  expense: number
+  incomeItems: AnnualItem[]
+  expenseItems: AnnualItem[]
+}
+
+function AnnualIETooltip({ active, payload }: {
+  active?: boolean
+  payload?: Array<{ dataKey: string; value: number; payload: AnnualPoint }>
+}) {
   if (!active || !payload?.length) return null
+  const pt = payload[0]?.payload
+  if (!pt) return null
   return (
-    <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-lg border border-gray-700">
-      <div className="text-gray-400 mb-1">{label}</div>
-      {payload.map(p => (
-        <div key={p.dataKey} className={p.dataKey === 'income' ? 'text-green-400' : 'text-red-400'}>
-          {p.name}: {formatCurrency(p.value, 'EUR')}
+    <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-lg border border-gray-700 max-w-[210px]">
+      <div className="font-semibold text-[12px] mb-2 pb-1 border-b border-gray-700">{pt.year}</div>
+      {pt.incomeItems.length > 0 && (
+        <div className="mb-2">
+          <div className="text-green-400 text-[10px] font-medium mb-1">Income</div>
+          {pt.incomeItems.slice(0, 4).map((it, i) => (
+            <div key={i} className="flex items-start gap-1">
+              <span className="text-gray-500 shrink-0">•</span>
+              <span className="text-gray-300 flex-1 min-w-0 truncate">{it.label}</span>
+              <span className="text-white shrink-0 ml-2">{formatCurrency(it.amount, it.currency)}</span>
+            </div>
+          ))}
+          {pt.incomeItems.length > 4 && <div className="text-gray-500">+{pt.incomeItems.length - 4} more</div>}
         </div>
-      ))}
+      )}
+      {pt.expenseItems.length > 0 && (
+        <div>
+          <div className="text-red-400 text-[10px] font-medium mb-1">Expenses</div>
+          {pt.expenseItems.slice(0, 4).map((it, i) => (
+            <div key={i} className="flex items-start gap-1">
+              <span className="text-gray-500 shrink-0">•</span>
+              <span className="text-gray-300 flex-1 min-w-0 truncate">{it.label}</span>
+              <span className="text-white shrink-0 ml-2">{formatCurrency(it.amount, it.currency)}</span>
+            </div>
+          ))}
+          {pt.expenseItems.length > 4 && <div className="text-gray-500">+{pt.expenseItems.length - 4} more</div>}
+        </div>
+      )}
     </div>
   )
 }
@@ -146,23 +180,30 @@ function AnnualIncomeExpenseChart({ result, expenses, medicalCoverages, medicalE
 }) {
   const allExp = allExpensesOf(expenses, medicalCoverages, medicalExpenses)
 
-  const data = result.years.filter((_, i) => i % 3 === 0).map((year) => {
+  const data: AnnualPoint[] = result.years.filter((_, i) => i % 3 === 0).map((year) => {
     const selfAge = year - profile.birthYear
-    let income = 0
+    const incomeItems: AnnualItem[] = []
+    const expenseItems: AnnualItem[] = []
+
     for (const p of pensions) {
       const pAge = p.person === 'self' ? selfAge : year - profile.spouseBirthYear
-      if (pAge >= p.startAge) income += p.monthlyAmount * 12 * (p.currency === 'EUR' ? 1 : 1 / DEFAULT_EUR_USD_RATE)
+      if (pAge >= p.startAge) {
+        incomeItems.push({ label: p.label, amount: p.monthlyAmount * 12, currency: p.currency })
+      }
     }
-    let expense = 0
+
     for (const exp of allExp) {
       const s = parseInt(exp.startDate.split('-')[0])
       const e = exp.endDate ? parseInt(exp.endDate.split('-')[0]) : 9999
       if (year >= s && year <= e) {
         const a = exp.frequency === 'monthly' ? exp.amount * 12 : exp.amount
-        expense += exp.currency === 'EUR' ? a : a / DEFAULT_EUR_USD_RATE
+        expenseItems.push({ label: exp.name, amount: a, currency: exp.currency })
       }
     }
-    return { year, income: Math.round(income), expense: Math.round(expense) }
+
+    const income = Math.round(incomeItems.reduce((s, i) => s + (i.currency === 'EUR' ? i.amount : i.amount / DEFAULT_EUR_USD_RATE), 0))
+    const expense = Math.round(expenseItems.reduce((s, i) => s + (i.currency === 'EUR' ? i.amount : i.amount / DEFAULT_EUR_USD_RATE), 0))
+    return { year, income, expense, incomeItems, expenseItems }
   })
 
   return (
@@ -203,6 +244,11 @@ interface MonthlyPoint {
   expenseItems: MonthItem[]
 }
 
+// Correct modulo that handles negative numbers
+function safeMonth(totalM: number): number {
+  return (((totalM - 1) % 12) + 12) % 12 + 1
+}
+
 function buildMonthlyData(
   expenses: Expense[],
   medicalCoverages: MedicalCoverage[],
@@ -221,13 +267,12 @@ function buildMonthlyData(
   for (let offset = -pastMonths; offset <= futureMonths; offset++) {
     const totalM = cm + offset
     const year = cy + Math.floor((totalM - 1) / 12)
-    const month = ((totalM - 1) % 12) + 1
+    const month = safeMonth(totalM)
     const ym = `${year}-${String(month).padStart(2, '0')}`
 
     const incomeItems: MonthItem[] = []
     const expenseItems: MonthItem[] = []
 
-    // Pensions
     for (const p of pensions) {
       const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
       const startYear = personBY + p.startAge
@@ -235,7 +280,6 @@ function buildMonthlyData(
       incomeItems.push({ label: p.label, amount: p.monthlyAmount, currency: p.currency, amountEUR: toEUR(p.monthlyAmount, p.currency) })
     }
 
-    // Expenses
     for (const exp of allExp) {
       const startY = parseInt(exp.startDate.split('-')[0])
       const startM = parseInt(exp.startDate.split('-')[1] ?? '1')
@@ -267,22 +311,42 @@ function buildMonthlyData(
   return points
 }
 
-function MonthlyTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey: string; value: number; payload: MonthlyPoint }>; label?: string }) {
+function MonthlyTooltip({ active, payload }: {
+  active?: boolean
+  payload?: Array<{ dataKey: string; value: number; payload: MonthlyPoint }>
+}) {
   if (!active || !payload?.length) return null
   const pt = payload[0]?.payload
   if (!pt) return null
-  const isIncome = payload.some(p => p.dataKey === 'income' && p.value > 0)
-  const items = isIncome ? pt.incomeItems : pt.expenseItems
   return (
     <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-lg border border-gray-700 max-w-[220px]">
-      <div className="text-gray-400 mb-1 font-medium">{label}</div>
-      {items.slice(0, 8).map((it, i) => (
-        <div key={i} className="flex justify-between gap-3">
-          <span className="text-gray-300 truncate">{it.label}</span>
-          <span className="text-white shrink-0">{formatCurrency(it.amount, it.currency)}</span>
+      <div className="font-semibold text-[12px] mb-2 pb-1 border-b border-gray-700">{pt.monthLabel}</div>
+      {pt.incomeItems.length > 0 && (
+        <div className="mb-2">
+          <div className="text-green-400 text-[10px] font-medium mb-1">Income</div>
+          {pt.incomeItems.slice(0, 4).map((it, i) => (
+            <div key={i} className="flex items-start gap-1">
+              <span className="text-gray-500 shrink-0">•</span>
+              <span className="text-gray-300 flex-1 min-w-0 truncate">{it.label}</span>
+              <span className="text-white shrink-0 ml-2">{formatCurrency(it.amount, it.currency)}</span>
+            </div>
+          ))}
+          {pt.incomeItems.length > 4 && <div className="text-gray-500">+{pt.incomeItems.length - 4} more</div>}
         </div>
-      ))}
-      {items.length > 8 && <div className="text-gray-500 mt-1">+{items.length - 8} more</div>}
+      )}
+      {pt.expenseItems.length > 0 && (
+        <div>
+          <div className="text-red-400 text-[10px] font-medium mb-1">Expenses</div>
+          {pt.expenseItems.slice(0, 4).map((it, i) => (
+            <div key={i} className="flex items-start gap-1">
+              <span className="text-gray-500 shrink-0">•</span>
+              <span className="text-gray-300 flex-1 min-w-0 truncate">{it.label}</span>
+              <span className="text-white shrink-0 ml-2">{formatCurrency(it.amount, it.currency)}</span>
+            </div>
+          ))}
+          {pt.expenseItems.length > 4 && <div className="text-gray-500 mt-1">+{pt.expenseItems.length - 4} more</div>}
+        </div>
+      )}
     </div>
   )
 }
@@ -299,9 +363,6 @@ function MonthlyItemList({ items, sign, colorClass }: { items: MonthItem[]; sign
           </span>
         </div>
       ))}
-      <div className="text-[10px] text-gray-400 mt-1 pt-1 border-t border-gray-100 dark:border-gray-700">
-        Total {sign}{formatCurrency(items.reduce((s, i) => s + i.amountEUR, 0), 'EUR')} EUR
-      </div>
     </div>
   )
 }
@@ -312,6 +373,7 @@ function MonthlyIEChart({ monthlyData }: { monthlyData: MonthlyPoint[] }) {
   const [selected, setSelected] = useState(currentYM)
 
   const activePt = monthlyData.find(p => p.month === selected) ?? monthlyData[Math.floor(monthlyData.length / 2)]
+  const currentMonthLabel = monthlyData.find(p => p.month === currentYM)?.monthLabel ?? ''
 
   return (
     <div className="grid grid-cols-[1fr_240px] gap-4">
@@ -326,14 +388,22 @@ function MonthlyIEChart({ monthlyData }: { monthlyData: MonthlyPoint[] }) {
               tickFormatter={l => l.split(' ')[0]} />
             <YAxis tickFormatter={(v) => formatCompact(v, 'EUR')} tick={{ fontSize: 9 }} tickLine={false} axisLine={false} width={40} />
             <Tooltip content={<MonthlyTooltip />} />
-            <ReferenceLine x={monthlyData.find(p => p.month === currentYM)?.monthLabel} stroke="#94a3b8" strokeDasharray="3 3" strokeWidth={1} />
-            <Bar dataKey="income" name="Income" fill="#22c55e" opacity={0.7} radius={[2, 2, 0, 0]}
-              onClick={(d) => setSelected((d as MonthlyPoint).month)} />
-            <Bar dataKey="expense" name="Expenses" fill="#ef4444" opacity={0.5} radius={[2, 2, 0, 0]}
-              onClick={(d) => setSelected((d as MonthlyPoint).month)} />
+            {/* Highlight current month */}
+            <ReferenceArea x1={currentMonthLabel} x2={currentMonthLabel} fill="#3b82f6" fillOpacity={0.07} />
+            <Bar dataKey="income" name="Income" radius={[2, 2, 0, 0]}
+              onClick={(d) => setSelected((d as MonthlyPoint).month)}>
+              {monthlyData.map((entry, index) => (
+                <Cell key={index} fill="#22c55e" opacity={entry.month === currentYM ? 1.0 : 0.55} />
+              ))}
+            </Bar>
+            <Bar dataKey="expense" name="Expenses" radius={[2, 2, 0, 0]}
+              onClick={(d) => setSelected((d as MonthlyPoint).month)}>
+              {monthlyData.map((entry, index) => (
+                <Cell key={index} fill="#ef4444" opacity={entry.month === currentYM ? 0.85 : 0.4} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
-        <p className="text-[10px] text-gray-400 mt-1">Click a bar to see details · dashed line = today</p>
       </div>
 
       {activePt && (
@@ -369,18 +439,19 @@ function buildUpcomingExpenses(
   medicalCoverages: MedicalCoverage[],
   medicalExpenses: MedicalExpense[],
   today: Date,
-  maxMonths = 3,
-  maxItems = 10,
+  pastMonths = 6,
+  futureMonths = 6,
+  maxItems = 20,
 ): UpcomingItem[] {
   const allExp = allExpensesOf(expenses, medicalCoverages, medicalExpenses)
   const items: UpcomingItem[] = []
   const cy = today.getFullYear()
   const cm = today.getMonth() + 1
 
-  for (let i = 0; i < maxMonths; i++) {
-    const totalM = cm + i
+  for (let offset = -pastMonths; offset <= futureMonths; offset++) {
+    const totalM = cm + offset
     const year = cy + Math.floor((totalM - 1) / 12)
-    const month = ((totalM - 1) % 12) + 1
+    const month = safeMonth(totalM)
 
     for (const exp of allExp) {
       const startY = parseInt(exp.startDate.split('-')[0])
@@ -412,17 +483,18 @@ function buildUpcomingIncome(
   windfalls: Windfall[],
   profile: UserProfile,
   today: Date,
-  maxMonths = 3,
-  maxItems = 10,
+  pastMonths = 6,
+  futureMonths = 6,
+  maxItems = 20,
 ): UpcomingItem[] {
   const items: UpcomingItem[] = []
   const cy = today.getFullYear()
   const cm = today.getMonth() + 1
 
-  for (let i = 0; i < maxMonths; i++) {
-    const totalM = cm + i
+  for (let offset = -pastMonths; offset <= futureMonths; offset++) {
+    const totalM = cm + offset
     const year = cy + Math.floor((totalM - 1) / 12)
-    const month = ((totalM - 1) % 12) + 1
+    const month = safeMonth(totalM)
     for (const p of pensions) {
       const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
       if (personBY + p.startAge > year) continue
@@ -430,11 +502,19 @@ function buildUpcomingIncome(
       items.push({ key: `pension-${p.id}-${ym}`, date: ym, label: p.label, amount: p.monthlyAmount, currency: p.currency, badge: 'projected' })
     }
   }
+
+  // Windfalls within window
+  const startTotalM = cm - pastMonths
+  const endTotalM = cm + futureMonths
+  const startYear = cy + Math.floor((startTotalM - 1) / 12)
+  const endYear = cy + Math.floor((endTotalM - 1) / 12)
   for (const w of windfalls) {
-    if (parseInt(w.date) === cy) {
-      items.push({ key: `windfall-${w.id}`, date: `${cy}-01`, label: w.name, amount: w.amount, currency: w.currency, badge: 'windfall' })
+    const wYear = parseInt(w.date)
+    if (wYear >= startYear && wYear <= endYear) {
+      items.push({ key: `windfall-${w.id}`, date: `${wYear}-01`, label: w.name, amount: w.amount, currency: w.currency, badge: 'windfall' })
     }
   }
+
   return items.sort((a, b) => a.date.localeCompare(b.date)).slice(0, maxItems)
 }
 
@@ -457,7 +537,6 @@ function UpcomingPanel({ title, items, colorClass, sign, emptyMsg }: {
                 <div className="flex items-center gap-1.5 mt-[1px]">
                   <span className="text-[10px] text-gray-400">{toMonthLabel(y, m)}</span>
                   {item.badge === 'recurring' && <Badge variant="warning">Recurring</Badge>}
-                  {item.badge === 'one_time' && <Badge variant="neutral">One-time</Badge>}
                   {item.badge === 'projected' && <Badge variant="purple">Projected</Badge>}
                   {item.badge === 'windfall' && <Badge variant="purple">Windfall</Badge>}
                 </div>
@@ -469,11 +548,6 @@ function UpcomingPanel({ title, items, colorClass, sign, emptyMsg }: {
           )
         })}
       </div>
-      {items.length > 0 && (
-        <div className="text-[10px] text-gray-400 mt-2">
-          Total: {sign}{formatCurrency(items.reduce((s, i) => s + toEUR(i.amount, i.currency), 0), 'EUR')} EUR
-        </div>
-      )}
     </div>
   )
 }
@@ -520,8 +594,8 @@ export default function Dashboard() {
 
   const result = simulationResult
   const today = new Date()
-  const upcomingExpenses = buildUpcomingExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [], today, 3, 10)
-  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, profile, today, 3, 10)
+  const upcomingExpenses = buildUpcomingExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [], today, 6, 6, 20)
+  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, profile, today, 6, 6, 20)
   const monthlyData = buildMonthlyData(expenses, medicalCoverages ?? [], medicalExpenses ?? [], pensions, profile, today, 6, 6)
 
   return (
@@ -570,7 +644,7 @@ export default function Dashboard() {
           )}
         </Card>
 
-        {/* Annual income vs expenses — full retirement horizon */}
+        {/* Annual income vs expenses */}
         <Card>
           <CardTitle>Income vs expenses — full retirement ({profile.baseCurrency})</CardTitle>
           {result ? (
@@ -589,7 +663,7 @@ export default function Dashboard() {
           )}
         </Card>
 
-        {/* Monthly ±6 month chart + upcoming panels */}
+        {/* Monthly ±6m chart + upcoming panels */}
         <div className="grid grid-cols-[3fr_1fr_1fr] gap-3">
           <Card>
             <CardTitle>Income vs expenses — last 6m / next 6m ({profile.baseCurrency})</CardTitle>
@@ -598,21 +672,21 @@ export default function Dashboard() {
 
           <Card>
             <UpcomingPanel
-              title="Upcoming expenses (3 months)"
+              title="Expenses — ±6 months"
               items={upcomingExpenses}
               colorClass="text-red-500"
               sign="−"
-              emptyMsg="No upcoming expenses"
+              emptyMsg="No expenses in window"
             />
           </Card>
 
           <Card>
             <UpcomingPanel
-              title="Upcoming income (3 months)"
+              title="Income — ±6 months"
               items={upcomingIncome}
               colorClass="text-green-600"
               sign="+"
-              emptyMsg="No upcoming income"
+              emptyMsg="No income in window"
             />
           </Card>
         </div>

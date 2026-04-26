@@ -151,13 +151,13 @@ export default function Accounts() {
             return (
               <TableRow key={acc.id}>
                 <div className={`grid grid-cols-[24px_2fr_1fr_1fr_1.5fr_1fr_60px] gap-2 items-center ${!included ? 'opacity-40' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={included}
-                    onChange={() => toggleIncluded(acc.id)}
-                    title="Include in planning"
-                    className="cursor-pointer"
-                  />
+                  <button
+                    onClick={() => toggleIncluded(acc.id)}
+                    title={included ? 'Included in planning — click to exclude' : 'Excluded — click to include'}
+                    className={`relative inline-flex h-[14px] w-[26px] items-center rounded-full transition-colors focus:outline-none ${included ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                  >
+                    <span className={`inline-block h-[10px] w-[10px] transform rounded-full bg-white shadow transition-transform ${included ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
+                  </button>
                   <span className="font-medium truncate">{acc.name}</span>
                   <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                     {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
