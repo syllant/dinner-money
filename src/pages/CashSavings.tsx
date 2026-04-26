@@ -6,7 +6,7 @@ import { Table, TableHead, TableRow } from '../components/ui/Table'
 import { Banner } from '../components/ui/Banner'
 import { formatCurrency, formatCompact } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE } from '../lib/currency'
-import type { Account } from '../types'
+import type { Account, PensionEstimate, UserProfile } from '../types'
 
 function toEUR(amount: number, currency: string) {
   return currency.toUpperCase() === 'USD' ? amount / DEFAULT_EUR_USD_RATE : amount
@@ -35,34 +35,37 @@ function computeMonthlyBurn(
   }, 0)
 }
 
+function computeMonthlyIncome(pensions: PensionEstimate[], profile: UserProfile): number {
+  const today = new Date()
+  const cy = today.getFullYear()
+  return pensions.reduce((sum, p) => {
+    const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
+    if (personBY + p.startAge > cy) return sum
+    return sum + toEUR(p.monthlyAmount, p.currency)
+  }, 0)
+}
+
 function AccountTable({ accounts }: { accounts: Account[] }) {
   return (
     <Table>
       <TableHead>
-        <div className="grid grid-cols-[2fr_1fr_1fr_1.2fr] gap-2">
-          <span>Account</span><span>Balance</span><span>Rate</span><span>Health</span>
+        <div className="grid grid-cols-[2fr_1fr_0.8fr] gap-2">
+          <span>Account</span><span>Balance</span><span>APY</span>
         </div>
       </TableHead>
       {accounts.length > 0 ? accounts.map(acc => {
         const rate = acc.interestRate ?? 0
-        const health: 'good' | 'warn' | 'bad' = rate >= 3 ? 'good' : rate >= 1 ? 'warn' : 'bad'
+        const rateColor = rate >= 3 ? 'text-green-600' : rate >= 1 ? 'text-amber-500' : 'text-gray-400'
         return (
           <TableRow key={acc.id}>
-            <div className="grid grid-cols-[2fr_1fr_1fr_1.2fr] gap-2 items-center">
+            <div className="grid grid-cols-[2fr_1fr_0.8fr] gap-2 items-center">
               <span className="font-medium truncate">{acc.name}</span>
               <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
                 {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
               </span>
-              <span className="text-[12px] text-gray-500">{rate > 0 ? `${rate}%` : '—'}</span>
-              <div className="flex items-center gap-2">
-                <div className="h-[4px] w-16 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
-                  <div className="h-full rounded-full" style={{
-                    width: `${Math.min(100, rate / 5 * 100)}%`,
-                    background: health === 'good' ? '#22c55e' : health === 'warn' ? '#f59e0b' : '#ef4444'
-                  }} />
-                </div>
-                <span className="text-[11px] text-gray-500">{health === 'good' ? 'Good' : health === 'warn' ? 'Low' : 'No yield'}</span>
-              </div>
+              <span className={`text-[12px] font-medium ${rateColor}`}>
+                {rate > 0 ? `${rate}%` : '—'}
+              </span>
             </div>
           </TableRow>
         )
@@ -75,13 +78,13 @@ function AccountTable({ accounts }: { accounts: Account[] }) {
   )
 }
 
-function CurrencyColumn({ currency, accounts, total, monthlyBurn }: {
+function CurrencyColumn({ currency, accounts, total, monthlyNetDrain }: {
   currency: 'USD' | 'EUR'
   accounts: Account[]
   total: number
-  monthlyBurn: number
+  monthlyNetDrain: number
 }) {
-  const runway = monthlyBurn > 0 ? total / monthlyBurn : 0
+  const runway = monthlyNetDrain > 0 ? total / monthlyNetDrain : Infinity
   const zeroYield = accounts.filter(a => (a.interestRate ?? 0) === 0)
   const zeroYieldAmount = zeroYield.reduce((s, a) => s + a.balance, 0)
   const hasZeroYieldWarning = currency === 'EUR' && total > 0 && zeroYieldAmount / total > 0.3
@@ -99,9 +102,9 @@ function CurrencyColumn({ currency, accounts, total, monthlyBurn }: {
           sub={`${accounts.length} account${accounts.length !== 1 ? 's' : ''}`}
         />
         <MetricCard
-          label="Liquidity runway"
-          value={monthlyBurn > 0 ? `~${Math.round(runway)} mo` : '—'}
-          sub={monthlyBurn > 0 ? `at ${formatCurrency(monthlyBurn, 'EUR')}/mo burn` : 'No expenses configured'}
+          label="Runway"
+          value={monthlyNetDrain > 0 ? `~${Math.round(runway)} mo` : '—'}
+          sub={monthlyNetDrain > 0 ? `net drain ${formatCurrency(monthlyNetDrain, 'EUR')}/mo` : 'No net outflow'}
         />
       </div>
       {hasZeroYieldWarning && (
@@ -116,9 +119,8 @@ function CurrencyColumn({ currency, accounts, total, monthlyBurn }: {
 }
 
 export default function CashSavings() {
-  const { accounts, expenses, medicalCoverages, medicalExpenses } = useAppStore()
+  const { accounts, expenses, medicalCoverages, medicalExpenses, pensions, profile } = useAppStore()
 
-  // Only included cash accounts
   const cashAccounts = accounts.filter(a => a.type === 'cash' && a.includedInPlanning !== false)
   const usdAccounts = cashAccounts.filter(a => a.currency.toUpperCase() === 'USD')
   const eurAccounts = cashAccounts.filter(a => a.currency.toUpperCase() === 'EUR')
@@ -128,8 +130,18 @@ export default function CashSavings() {
   const totalEUR = eurCash + usdCash / DEFAULT_EUR_USD_RATE
 
   const monthlyBurnEUR = computeMonthlyBurn(expenses, medicalCoverages, medicalExpenses)
-  const monthlyBurnUSD = monthlyBurnEUR * DEFAULT_EUR_USD_RATE
-  const totalRunway = monthlyBurnEUR > 0 ? totalEUR / monthlyBurnEUR : 0
+  const monthlyIncomeEUR = computeMonthlyIncome(pensions, profile)
+  const monthlyNetDrainEUR = Math.max(0, monthlyBurnEUR - monthlyIncomeEUR)
+  const monthlyNetDrainUSD = monthlyNetDrainEUR * DEFAULT_EUR_USD_RATE
+  const totalRunway = monthlyNetDrainEUR > 0 ? totalEUR / monthlyNetDrainEUR : Infinity
+
+  const runoutDate = monthlyNetDrainEUR > 0
+    ? (() => {
+        const d = new Date()
+        d.setMonth(d.getMonth() + Math.round(totalEUR / monthlyNetDrainEUR))
+        return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      })()
+    : null
 
   return (
     <div>
@@ -137,27 +149,37 @@ export default function CashSavings() {
       <div className="p-4 space-y-5">
 
         <Card>
-          <CardTitle>Total liquidity (consolidated)</CardTitle>
+          <CardTitle>Liquidity overview</CardTitle>
           <div className="grid grid-cols-3 gap-3">
             <MetricCard
-              label="Total liquidity (EUR)"
+              label="Total cash (EUR equiv.)"
               value={formatCompact(totalEUR, 'EUR')}
               sub={`${cashAccounts.length} cash accounts`}
             />
             <MetricCard
-              label="Liquidity runway"
-              value={monthlyBurnEUR > 0 ? `~${Math.round(totalRunway)} months` : '—'}
-              sub={monthlyBurnEUR > 0 ? `at ${formatCurrency(monthlyBurnEUR, 'EUR')}/mo burn` : 'Configure expenses for burn rate'}
+              label="Net monthly outflow"
+              value={monthlyNetDrainEUR > 0 ? `−${formatCurrency(monthlyNetDrainEUR, 'EUR')}/mo` : monthlyBurnEUR > 0 ? 'Covered by income' : '—'}
+              sub={monthlyBurnEUR > 0
+                ? `${formatCurrency(monthlyBurnEUR, 'EUR')}/mo burn − ${formatCurrency(monthlyIncomeEUR, 'EUR')}/mo income`
+                : 'No expenses configured'}
             />
-            <div className="flex items-center justify-center text-[11px] text-gray-400 border border-dashed border-gray-200 dark:border-gray-700 rounded-xl px-3 py-4 text-center leading-relaxed">
-              Historical balance chart coming in a future update
-            </div>
+            <MetricCard
+              label="Cash runway"
+              value={monthlyNetDrainEUR > 0 ? `~${Math.round(totalRunway)} months` : '—'}
+              sub={runoutDate ? `Runs out ~${runoutDate}` : monthlyNetDrainEUR === 0 && monthlyBurnEUR > 0 ? 'Income covers burn' : 'Configure expenses'}
+              valueClass={totalRunway < 12 ? 'text-red-500' : totalRunway < 24 ? 'text-amber-500' : undefined}
+            />
           </div>
+          {monthlyNetDrainEUR > 0 && totalRunway < 18 && (
+            <Banner variant="warning" className="mt-3">
+              ⚠ Less than 18 months of cash runway — consider funding your accounts or reducing expenses.
+            </Banner>
+          )}
         </Card>
 
         <div className="grid grid-cols-2 gap-5">
-          <CurrencyColumn currency="USD" accounts={usdAccounts} total={usdCash} monthlyBurn={monthlyBurnUSD} />
-          <CurrencyColumn currency="EUR" accounts={eurAccounts} total={eurCash} monthlyBurn={monthlyBurnEUR} />
+          <CurrencyColumn currency="USD" accounts={usdAccounts} total={usdCash} monthlyNetDrain={monthlyNetDrainUSD} />
+          <CurrencyColumn currency="EUR" accounts={eurAccounts} total={eurCash} monthlyNetDrain={monthlyNetDrainEUR} />
         </div>
 
       </div>

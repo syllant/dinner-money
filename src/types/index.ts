@@ -51,7 +51,7 @@ export interface Account {
 
 // ─── Pensions ─────────────────────────────────────────────────────────────────
 
-export type PensionSource = 'US_SS' | 'FR_CNAV' | 'FR_AGIRC' | 'OTHER'
+export type PensionSource = 'US_SS' | 'FR_RETRAITE' | 'OTHER'
 
 export interface PensionEstimate {
   id: string

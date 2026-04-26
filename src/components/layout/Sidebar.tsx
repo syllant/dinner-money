@@ -3,7 +3,7 @@ import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank, ArrowLeftRight,
   FileText, User, CreditCard, Clock, Home, Receipt,
-  Star, Activity, Settings, RefreshCw,
+  Banknote, Activity, Settings, RefreshCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
@@ -29,8 +29,8 @@ const configItems: NavItem[] = [
   { to: '/config/accounts', label: 'Accounts', icon: <CreditCard size={13} /> },
   { to: '/config/pensions', label: 'Pensions', icon: <Clock size={13} /> },
   { to: '/config/real-estate', label: 'Real estate', icon: <Home size={13} /> },
+  { to: '/config/income', label: 'Income', icon: <Banknote size={13} /> },
   { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
-  { to: '/config/windfalls', label: 'Windfalls', icon: <Star size={13} /> },
   { to: '/config/simulation', label: 'Simulation', icon: <Activity size={13} /> },
 ]
 
@@ -78,11 +78,18 @@ function SyncStatus() {
           return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: type === 'loan' ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: false }
         }),
       ]
-      const existing = new Map(accounts.map(a => [a.id, a]))
+      const existing = new Map(useAppStore.getState().accounts.map(a => [a.id, a]))
       const merged = mapped.map(a => {
         const ex = existing.get(a.id)
         if (!ex) return a
-        return { ...a, allocation: ex.allocation, includedInPlanning: ex.includedInPlanning, ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}) }
+        return {
+          ...a,
+          allocation: ex.allocation,
+          includedInPlanning: ex.includedInPlanning,
+          interestRate: ex.interestRate,
+          dueDate: ex.dueDate,
+          ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}),
+        }
       })
       setAccounts(merged)
     } catch (_) {

@@ -1,114 +1,139 @@
 import { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
-import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
-import { Badge } from '../../components/ui/Badge'
 import { formatCurrency, generateId } from '../../lib/format'
+import { recurrenceNote, monthLabel } from '../../components/ui/FlowRow'
 import type { Expense, MedicalCoverage, MedicalExpense } from '../../types'
 
-const EXPENSE_CATEGORIES = ['Living', 'Housing', 'Food', 'Transport', 'Education', 'Travel', 'Entertainment', 'Medical', 'Other']
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-// ─── Shared row layout ────────────────────────────────────────────────────────
+type ExpSource = 'coverage' | 'medical' | 'expense'
 
-function ExpenseRow({ name, amount, currency, frequency, startDate, endDate, category, onEdit, onDelete }: {
-  name: string; amount: number; currency: string; frequency: string
-  startDate: string; endDate: string | null
-  category?: string
-  onEdit: () => void; onDelete: () => void
-}) {
-  return (
-    <TableRow>
-      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_60px] gap-2 items-center">
-        <div>
-          <div className="font-medium">{name}</div>
-          {category && <div className="text-[10px] text-gray-400">{category}</div>}
-        </div>
-        <span>{formatCurrency(amount, currency)}</span>
-        <span>
-          {frequency === 'monthly'
-            ? <Badge variant="warning">Monthly</Badge>
-            : frequency === 'yearly'
-            ? <Badge variant="warning">Yearly</Badge>
-            : <span className="text-[11px] text-gray-300 dark:text-gray-600">—</span>}
-        </span>
-        <Badge variant={currency === 'EUR' ? 'eur' : 'usd'}>{currency}</Badge>
-        <span className="text-[11px] text-gray-400">{endDate ? `${startDate} → ${endDate}` : `${startDate} →`}</span>
-        <div className="flex gap-2">
-          <button className="text-[11px] text-blue-600 hover:underline" onClick={onEdit}>Edit</button>
-          <button className="text-[11px] text-red-500 hover:underline" onClick={onDelete}>Del</button>
-        </div>
-      </div>
-    </TableRow>
-  )
-}
-
-function TableColumns() {
-  return (
-    <TableHead>
-      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_60px] gap-2">
-        <span>Name</span><span>Amount</span><span>Frequency</span><span>Currency</span><span>Period</span><span></span>
-      </div>
-    </TableHead>
-  )
-}
-
-// ─── Inline edit form (shared) ────────────────────────────────────────────────
-
-interface EditFields {
-  name: string; amount: number; currency: 'USD' | 'EUR'
+interface UnifiedExpense {
+  id: string
+  name: string
+  amount: number
+  currency: 'USD' | 'EUR'
   frequency: 'monthly' | 'yearly' | 'one_time'
-  startDate: string; endDate: string | null
+  startDate: string
+  endDate: string | null
+  category: string
+  source: ExpSource
 }
 
-function EditForm<T extends EditFields>({
-  editing, title, onChange, onSave, onCancel, children,
-}: {
-  editing: T
-  title: string
-  onChange: (patch: Partial<T>) => void
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const CATEGORY_OPTIONS = [
+  'Medical coverage', 'Medical', 'Housing', 'Food', 'Transport',
+  'Education', 'Travel', 'Entertainment', 'Living', 'Other',
+]
+
+const CATEGORY_ORDER: Record<string, number> = Object.fromEntries(CATEGORY_OPTIONS.map((c, i) => [c, i]))
+
+function categoryOrder(cat: string): number {
+  return CATEGORY_ORDER[cat] ?? 99
+}
+
+// ─── Flatten helpers ──────────────────────────────────────────────────────────
+
+function flattenExpenses(
+  expenses: Expense[],
+  medicalCoverages: MedicalCoverage[],
+  medicalExpenses: MedicalExpense[],
+): UnifiedExpense[] {
+  const fromCoverage: UnifiedExpense[] = (medicalCoverages ?? []).map(c => ({
+    id: c.id, name: c.name, amount: c.amount, currency: c.currency as 'USD' | 'EUR',
+    frequency: c.frequency as UnifiedExpense['frequency'], startDate: c.startDate, endDate: c.endDate,
+    category: 'Medical coverage', source: 'coverage',
+  }))
+  const fromMedical: UnifiedExpense[] = (medicalExpenses ?? []).map(e => ({
+    id: e.id, name: e.name, amount: e.amount, currency: e.currency as 'USD' | 'EUR',
+    frequency: e.frequency as UnifiedExpense['frequency'], startDate: e.startDate, endDate: e.endDate,
+    category: e.category || 'Medical', source: 'medical',
+  }))
+  const fromExpenses: UnifiedExpense[] = expenses.map(e => ({
+    id: e.id, name: e.name, amount: e.amount, currency: e.currency as 'USD' | 'EUR',
+    frequency: e.frequency as UnifiedExpense['frequency'], startDate: e.startDate, endDate: e.endDate,
+    category: e.category || 'Other', source: 'expense',
+  }))
+  return [...fromCoverage, ...fromMedical, ...fromExpenses]
+    .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.startDate.localeCompare(b.startDate))
+}
+
+function blankExpense(): UnifiedExpense {
+  return {
+    id: generateId(), name: '', amount: 0, currency: 'EUR',
+    frequency: 'monthly', startDate: '2026-01', endDate: null,
+    category: 'Housing', source: 'expense',
+  }
+}
+
+function periodLabel(freq: string, startDate: string, endDate: string | null): string {
+  if (freq === 'one_time') return monthLabel(startDate)
+  return endDate ? `${startDate} → ${endDate}` : `${startDate} →`
+}
+
+// ─── Edit form ────────────────────────────────────────────────────────────────
+
+function EditForm({ editing, onChange, onSave, onCancel }: {
+  editing: UnifiedExpense
+  onChange: (patch: Partial<UnifiedExpense>) => void
   onSave: () => void
   onCancel: () => void
-  children?: React.ReactNode
 }) {
   return (
-    <div className="border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-3">
-      <h3 className="text-[12.5px] font-medium">{title}</h3>
+    <div className="border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4">
       <div className="grid grid-cols-3 gap-3">
         <div className="flex flex-col gap-1 col-span-2">
           <label className="text-[11px] text-gray-500">Name</label>
           <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.name} onChange={e => onChange({ name: e.target.value } as Partial<T>)} />
+            value={editing.name} onChange={e => onChange({ name: e.target.value })} autoFocus />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[11px] text-gray-500">Category</label>
+          <input
+            className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+            list="expense-categories"
+            value={editing.category}
+            onChange={e => onChange({ category: e.target.value })}
+          />
+          <datalist id="expense-categories">
+            {CATEGORY_OPTIONS.map(c => <option key={c} value={c} />)}
+          </datalist>
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Amount</label>
           <input type="number" className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.amount} onChange={e => onChange({ amount: parseFloat(e.target.value) } as Partial<T>)} />
+            value={editing.amount} onChange={e => onChange({ amount: parseFloat(e.target.value) || 0 })} />
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Currency</label>
           <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.currency} onChange={e => onChange({ currency: e.target.value as 'USD' | 'EUR' } as Partial<T>)}>
+            value={editing.currency} onChange={e => onChange({ currency: e.target.value as 'USD' | 'EUR' })}>
             <option value="USD">USD</option><option value="EUR">EUR</option>
           </select>
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Frequency</label>
           <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.frequency} onChange={e => onChange({ frequency: e.target.value as EditFields['frequency'] } as Partial<T>)}>
-            <option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one_time">One-time</option>
+            value={editing.frequency} onChange={e => onChange({ frequency: e.target.value as UnifiedExpense['frequency'] })}>
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+            <option value="one_time">One-time</option>
           </select>
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Start (YYYY-MM)</label>
           <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.startDate} onChange={e => onChange({ startDate: e.target.value } as Partial<T>)} placeholder="2026-01" />
+            value={editing.startDate} onChange={e => onChange({ startDate: e.target.value })} placeholder="2026-01" />
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] text-gray-500">End (YYYY-MM, blank = ongoing)</label>
-          <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.endDate ?? ''} onChange={e => onChange({ endDate: e.target.value || null } as Partial<T>)} placeholder="ongoing" />
-        </div>
-        {children}
+        {editing.frequency !== 'one_time' && (
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-gray-500">End (YYYY-MM, blank = ongoing)</label>
+            <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+              value={editing.endDate ?? ''} onChange={e => onChange({ endDate: e.target.value || null })} placeholder="ongoing" />
+          </div>
+        )}
       </div>
       <div className="flex gap-2">
         <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50" onClick={onCancel}>Cancel</button>
@@ -118,150 +143,126 @@ function EditForm<T extends EditFields>({
   )
 }
 
-// ─── Medical Coverage section ─────────────────────────────────────────────────
+// ─── Expense row ──────────────────────────────────────────────────────────────
 
-const blankCoverage = (): MedicalCoverage => ({
-  id: generateId(), name: '', amount: 0, frequency: 'monthly',
-  currency: 'USD', startDate: '2026-01', endDate: null,
-})
-
-function CoverageSection() {
-  const { medicalCoverages, upsertMedicalCoverage, deleteMedicalCoverage } = useAppStore()
-  const [editing, setEditing] = useState<MedicalCoverage | null>(null)
-  const isNew = editing ? !medicalCoverages.find(c => c.id === editing.id) : false
+function ExpenseItem({ item, onEdit, onDelete }: {
+  item: UnifiedExpense
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const note = recurrenceNote(item.frequency, item.startDate, item.endDate)
+  const period = periodLabel(item.frequency, item.startDate, item.endDate)
 
   return (
-    <section>
-      <h2 className="text-[13px] font-medium mb-1">Medical coverage</h2>
-      <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-        Health insurance premiums, COBRA, employer plans.
-      </p>
-      {editing && (
-        <EditForm
-          editing={editing}
-          title={isNew ? 'Add coverage' : 'Edit coverage'}
-          onChange={patch => setEditing(e => e ? { ...e, ...patch } : e)}
-          onSave={() => { upsertMedicalCoverage(editing); setEditing(null) }}
-          onCancel={() => setEditing(null)}
-        />
-      )}
-      <Table>
-        <TableColumns />
-        {medicalCoverages.map(c => (
-          <ExpenseRow key={c.id} name={c.name} amount={c.amount} currency={c.currency}
-            frequency={c.frequency} startDate={c.startDate} endDate={c.endDate}
-            onEdit={() => setEditing(c)} onDelete={() => deleteMedicalCoverage(c.id)} />
-        ))}
-        <TableAddRow onClick={() => setEditing(blankCoverage())}>+ Add coverage</TableAddRow>
-      </Table>
-    </section>
-  )
-}
-
-// ─── Medical Expenses section ─────────────────────────────────────────────────
-
-const blankMedExp = (): MedicalExpense => ({
-  id: generateId(), name: '', amount: 0, frequency: 'one_time',
-  currency: 'USD', startDate: '2026-01', endDate: null, category: 'Medical',
-})
-
-function MedicalExpenseSection() {
-  const { medicalExpenses, upsertMedicalExpense, deleteMedicalExpense } = useAppStore()
-  const [editing, setEditing] = useState<MedicalExpense | null>(null)
-  const isNew = editing ? !medicalExpenses.find(e => e.id === editing.id) : false
-
-  return (
-    <section>
-      <h2 className="text-[13px] font-medium mb-1">Medical expenses</h2>
-      <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-        Out-of-pocket: deductibles, copays, prescriptions, dental, vision.
-      </p>
-      {editing && (
-        <EditForm
-          editing={editing}
-          title={isNew ? 'Add medical expense' : 'Edit medical expense'}
-          onChange={patch => setEditing(e => e ? { ...e, ...patch } : e)}
-          onSave={() => { upsertMedicalExpense(editing); setEditing(null) }}
-          onCancel={() => setEditing(null)}
-        />
-      )}
-      <Table>
-        <TableColumns />
-        {medicalExpenses.map(e => (
-          <ExpenseRow key={e.id} name={e.name} amount={e.amount} currency={e.currency}
-            frequency={e.frequency} startDate={e.startDate} endDate={e.endDate}
-            onEdit={() => setEditing(e)} onDelete={() => deleteMedicalExpense(e.id)} />
-        ))}
-        <TableAddRow onClick={() => setEditing(blankMedExp())}>+ Add medical expense</TableAddRow>
-      </Table>
-    </section>
-  )
-}
-
-// ─── Other Expenses section ───────────────────────────────────────────────────
-
-const blankExpense = (): Expense => ({
-  id: generateId(), name: '', amount: 0, frequency: 'monthly',
-  currency: 'EUR', startDate: '2026-01', endDate: null, category: 'Living',
-})
-
-function OtherExpensesSection() {
-  const { expenses, upsertExpense, deleteExpense } = useAppStore()
-  const [editing, setEditing] = useState<Expense | null>(null)
-  const isNew = editing ? !expenses.find(e => e.id === editing.id) : false
-
-  return (
-    <section>
-      <h2 className="text-[13px] font-medium mb-1">Other expenses</h2>
-      <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-        Housing, food, transport, travel, and any other recurring costs.
-      </p>
-      {editing && (
-        <EditForm
-          editing={editing}
-          title={isNew ? 'Add expense' : 'Edit expense'}
-          onChange={patch => setEditing(e => e ? { ...e, ...patch } : e)}
-          onSave={() => { upsertExpense(editing); setEditing(null) }}
-          onCancel={() => setEditing(null)}
-        >
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] text-gray-500">Category</label>
-            <select
-              className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
-              value={editing.category ?? 'Living'}
-              onChange={e => setEditing(ed => ed ? { ...ed, category: e.target.value } : ed)}
-            >
-              {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-        </EditForm>
-      )}
-      <Table>
-        <TableColumns />
-        {expenses.map(e => (
-          <ExpenseRow key={e.id} name={e.name} amount={e.amount} currency={e.currency}
-            frequency={e.frequency} startDate={e.startDate} endDate={e.endDate}
-            category={e.category}
-            onEdit={() => setEditing(e)} onDelete={() => deleteExpense(e.id)} />
-        ))}
-        <TableAddRow onClick={() => setEditing(blankExpense())}>+ Add expense</TableAddRow>
-      </Table>
-    </section>
+    <div className="flex items-center gap-2 py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0">
+      <span className="text-[10px] text-gray-400 shrink-0 w-[80px]">{period}</span>
+      <span className="w-[14px] shrink-0 text-[11px] text-gray-400 text-center" title={item.frequency !== 'one_time' ? 'Recurring' : ''}>
+        {item.frequency !== 'one_time' ? '↻' : ''}
+      </span>
+      <span className="flex-1 min-w-0 truncate">
+        <span className="text-[12px] text-gray-900 dark:text-white">{item.name}</span>
+        {note && <span className="text-[10px] text-gray-400 ml-1.5">{note}</span>}
+      </span>
+      <span className="text-[12px] font-medium shrink-0 text-red-500">
+        −{formatCurrency(item.amount, item.currency)}
+      </span>
+      <button className="text-[11px] text-blue-600 hover:underline shrink-0" onClick={onEdit}>Edit</button>
+      <button className="text-[11px] text-red-500 hover:underline shrink-0" onClick={onDelete}>Del</button>
+    </div>
   )
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Expenses() {
+  const {
+    expenses, medicalCoverages, medicalExpenses,
+    upsertExpense, deleteExpense,
+    upsertMedicalCoverage, deleteMedicalCoverage,
+    upsertMedicalExpense, deleteMedicalExpense,
+  } = useAppStore()
+
+  const [editing, setEditing] = useState<UnifiedExpense | null>(null)
+
+  const all = flattenExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [])
+
+  const categories = Array.from(new Set(all.map(e => e.category)))
+    .sort((a, b) => categoryOrder(a) - categoryOrder(b))
+
+  function saveItem(item: UnifiedExpense) {
+    if (item.source === 'coverage') {
+      upsertMedicalCoverage({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate })
+    } else if (item.source === 'medical') {
+      upsertMedicalExpense({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, category: item.category })
+    } else {
+      upsertExpense({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, category: item.category })
+    }
+  }
+
+  function deleteItem(item: UnifiedExpense) {
+    if (item.source === 'coverage') deleteMedicalCoverage(item.id)
+    else if (item.source === 'medical') deleteMedicalExpense(item.id)
+    else deleteExpense(item.id)
+  }
+
   return (
     <div>
-      <PageHeader title="Expenses" />
-      <div className="p-4 space-y-8">
-        <CoverageSection />
-        <hr className="border-gray-200 dark:border-gray-700" />
-        <MedicalExpenseSection />
-        <hr className="border-gray-200 dark:border-gray-700" />
-        <OtherExpensesSection />
+      <PageHeader title="Expenses">
+        <button
+          className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          onClick={() => setEditing(blankExpense())}
+        >
+          + Add expense
+        </button>
+      </PageHeader>
+
+      <div className="p-4 space-y-4">
+        {editing && (
+          <EditForm
+            editing={editing}
+            onChange={patch => setEditing(e => e ? { ...e, ...patch } : e)}
+            onSave={() => { saveItem(editing); setEditing(null) }}
+            onCancel={() => setEditing(null)}
+          />
+        )}
+
+        {all.length === 0 && !editing && (
+          <div className="text-[12px] text-gray-400 py-4 text-center">
+            No expenses yet. Click "+ Add expense" to get started.
+          </div>
+        )}
+
+        {categories.map(cat => {
+          const items = all.filter(e => e.category === cat)
+          const totalEUR = items.reduce((s, e) => {
+            const eur = e.currency === 'USD' ? e.amount / 1.08 : e.amount
+            const monthly = e.frequency === 'monthly' ? eur : e.frequency === 'yearly' ? eur / 12 : 0
+            return s + monthly
+          }, 0)
+
+          return (
+            <section key={cat}>
+              <div className="flex items-center justify-between pb-[6px] border-b border-gray-200 dark:border-gray-700 mb-1">
+                <span className="text-[12.5px] font-medium">{cat}</span>
+                <span className="text-[11px] text-gray-400">
+                  {totalEUR > 0 ? `~${formatCurrency(Math.round(totalEUR), 'EUR')}/mo` : ''}
+                </span>
+              </div>
+              <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+                <div className="px-3">
+                  {items.map(item => (
+                    <ExpenseItem
+                      key={item.id}
+                      item={item}
+                      onEdit={() => setEditing(item)}
+                      onDelete={() => deleteItem(item)}
+                    />
+                  ))}
+                </div>
+              </div>
+            </section>
+          )
+        })}
       </div>
     </div>
   )

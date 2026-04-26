@@ -40,8 +40,9 @@ export default function App() {
           <Route path="/config/accounts" element={<Accounts />} />
           <Route path="/config/pensions" element={<Pensions />} />
           <Route path="/config/real-estate" element={<RealEstate />} />
-          <Route path="/config/expenses" element={<Expenses />} />
+          <Route path="/config/income" element={<Windfalls />} />
           <Route path="/config/windfalls" element={<Windfalls />} />
+          <Route path="/config/expenses" element={<Expenses />} />
           <Route path="/config/simulation" element={<Simulation />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
-import { Button } from '../../components/ui/Button'
 import { Banner } from '../../components/ui/Banner'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
 import { Badge } from '../../components/ui/Badge'
@@ -132,6 +131,8 @@ export default function Accounts() {
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
+
+  useEffect(() => { if (lmApiKey) syncFromLM() }, []) // eslint-disable-line
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
@@ -172,8 +173,8 @@ export default function Accounts() {
           }
         }),
       ]
-      // Preserve allocation always; preserve type only if user explicitly overrode it
-      const existing = new Map(accounts.map(a => [a.id, a]))
+      // Use getState() to get fresh accounts at sync time (avoids stale closure on auto-sync)
+      const existing = new Map(useAppStore.getState().accounts.map(a => [a.id, a]))
       const merged = mapped.map(a => {
         const ex = existing.get(a.id)
         if (!ex) return a
@@ -234,12 +235,9 @@ export default function Accounts() {
   return (
     <div>
       <PageHeader title="Accounts">
-        <div className="flex items-center gap-3">
-          {syncedAt && <span className="text-[11px] text-gray-400">Synced {syncedAt}</span>}
-          <Button variant="success" onClick={syncFromLM} disabled={syncing}>
-            {syncing ? 'Syncing…' : 'Sync from LunchMoney'}
-          </Button>
-        </div>
+        <span className="text-[11px] text-gray-400">
+          {syncing ? 'Syncing…' : syncedAt ? `Synced ${syncedAt}` : ''}
+        </span>
       </PageHeader>
       <div className="p-4 space-y-3">
         {!lmApiKey && (
