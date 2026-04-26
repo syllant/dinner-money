@@ -124,7 +124,7 @@ function CharacteristicsEdit({ acc, onUpdate }: {
 
 // ─── Column layout ─────────────────────────────────────────────────────────────
 
-const COLS = 'grid-cols-[2fr_1fr_1fr_1.5fr_1fr_60px_44px]'
+const COLS = 'grid-cols-[2fr_1fr_1fr_1.5fr_1fr_52px_44px]'
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
@@ -303,17 +303,19 @@ export default function Accounts() {
           </TableHead>
           {sorted.map(acc => {
             const included = acc.includedInPlanning !== false
+            const isEditing = editingId === acc.id
+            const plaidEligible = ['investment', 'retirement', 'cash'].includes(acc.type)
             return (
               <TableRow key={acc.id} dimmed={!included}>
+                {/* ── Main row ── */}
                 <div className={`grid ${COLS} gap-2 items-center`}>
                   {/* Account name */}
-                  <span className="font-medium truncate flex items-center gap-1.5">
-                    {acc.name}
-                    {['investment', 'retirement', 'cash'].includes(acc.type) && !acc.plaidAccessToken && (
-                      <span title="Can be synced with Plaid in Edit mode" className="text-[10px] opacity-50">💡</span>
-                    )}
+                  <span className="font-medium truncate flex items-center gap-1.5 min-w-0">
+                    <span className="truncate">{acc.name}</span>
                     {acc.plaidAccessToken && (
-                      <span title="Plaid synced" className="text-[10px] text-green-500">✓P</span>
+                      <span className="shrink-0 inline-flex items-center gap-0.5 text-[9.5px] font-medium px-1 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                        Plaid
+                      </span>
                     )}
                   </span>
 
@@ -329,62 +331,28 @@ export default function Accounts() {
                     </Badge>
                   </span>
 
-                  {/* Characteristics */}
-                  {editingId === acc.id ? (
-                    <div className="flex flex-col gap-2 py-1">
-                      <CharacteristicsEdit acc={acc} onUpdate={patch => upsertAccount({ ...acc, ...patch })} />
-                      {['investment', 'retirement', 'cash'].includes(acc.type) && (
-                        <PlaidConnect
-                          accountId={acc.id}
-                          isLinked={!!acc.plaidAccessToken}
-                          onLinked={async (token, itemId) => {
-                            upsertAccount({ ...acc, plaidAccessToken: token, plaidItemId: itemId })
-                            await syncSinglePlaid(acc.id, token)
-                          }}
-                          onUnlink={() => upsertAccount({ ...acc, plaidAccessToken: undefined, plaidItemId: undefined, holdings: undefined })}
-                          onRefresh={acc.plaidAccessToken ? () => syncSinglePlaid(acc.id, acc.plaidAccessToken!) : undefined}
-                        />
-                      )}
-                    </div>
-                  ) : (
-                    <CharacteristicsView acc={acc} />
-                  )}
+                  {/* Characteristics (view only in main row) */}
+                  <CharacteristicsView acc={acc} />
 
                   {/* Type */}
-                  {editingId === acc.id ? (
-                    <select
-                      className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1 bg-white dark:bg-gray-800"
-                      value={acc.type}
-                      onChange={e => upsertAccount({ ...acc, type: e.target.value as Account['type'], typeOverridden: true })}
-                    >
-                      <option value="investment">Investment</option>
-                      <option value="retirement">Retirement</option>
-                      <option value="cash">Cash</option>
-                      <option value="real_estate">Real estate</option>
-                      <option value="loan">Loan / Mortgage</option>
-                      <option value="credit">Credit card</option>
-                      <option value="other">Other</option>
-                    </select>
-                  ) : (
-                    <span>
-                      <Badge variant={TYPE_META[acc.type].variant}>
-                        {TYPE_META[acc.type].label}
-                        {acc.typeOverridden && <span className="ml-1 opacity-60">✎</span>}
-                      </Badge>
-                    </span>
-                  )}
+                  <span>
+                    <Badge variant={TYPE_META[acc.type].variant}>
+                      {TYPE_META[acc.type].label}
+                      {acc.typeOverridden && <span className="ml-1 opacity-60">✎</span>}
+                    </Badge>
+                  </span>
 
                   {/* Edit / Done */}
                   <button
-                    className="text-[11px] text-blue-600 hover:underline cursor-pointer"
-                    onClick={() => setEditingId(editingId === acc.id ? null : acc.id)}
+                    className={`text-[11px] cursor-pointer transition-colors ${isEditing ? 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200' : 'text-blue-600 hover:text-blue-800 dark:hover:text-blue-400'}`}
+                    onClick={() => setEditingId(isEditing ? null : acc.id)}
                   >
-                    {editingId === acc.id ? 'Done' : 'Edit'}
+                    {isEditing ? 'Done' : 'Edit'}
                   </button>
 
-                  {/* Include toggle (right) */}
+                  {/* Include toggle */}
                   <button
-                    onClick={() => upsertAccount({ ...acc, includedInPlanning: included ? false : true })}
+                    onClick={() => upsertAccount({ ...acc, includedInPlanning: !included })}
                     title={included ? 'Included in planning — click to exclude' : 'Excluded — click to include'}
                     className={`relative w-8 h-[17px] rounded-full transition-colors cursor-pointer shrink-0 ${
                       included ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
@@ -395,6 +363,53 @@ export default function Accounts() {
                     }`} />
                   </button>
                 </div>
+
+                {/* ── Edit panel (expands below row) ── */}
+                {isEditing && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/60 space-y-3">
+                    {/* Characteristics + type edit */}
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <CharacteristicsEdit acc={acc} onUpdate={patch => upsertAccount({ ...acc, ...patch })} />
+                      <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 shrink-0" />
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="text-gray-500">Type</span>
+                        <select
+                          className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800"
+                          value={acc.type}
+                          onChange={e => upsertAccount({ ...acc, type: e.target.value as Account['type'], typeOverridden: true })}
+                        >
+                          <option value="investment">Investment</option>
+                          <option value="retirement">Retirement</option>
+                          <option value="cash">Cash</option>
+                          <option value="real_estate">Real estate</option>
+                          <option value="loan">Loan / Mortgage</option>
+                          <option value="credit">Credit card</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Plaid section */}
+                    {plaidEligible && (
+                      <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2.5 bg-gray-50/50 dark:bg-gray-800/40">
+                        <div className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-[0.05em] mb-2">
+                          Holdings sync
+                        </div>
+                        <PlaidConnect
+                          accountId={acc.id}
+                          isLinked={!!acc.plaidAccessToken}
+                          holdingsCount={acc.holdings?.length}
+                          onLinked={async (token, itemId) => {
+                            upsertAccount({ ...acc, plaidAccessToken: token, plaidItemId: itemId })
+                            await syncSinglePlaid(acc.id, token)
+                          }}
+                          onUnlink={() => upsertAccount({ ...acc, plaidAccessToken: undefined, plaidItemId: undefined, holdings: undefined })}
+                          onRefresh={acc.plaidAccessToken ? () => syncSinglePlaid(acc.id, acc.plaidAccessToken!) : undefined}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
               </TableRow>
             )
           })}

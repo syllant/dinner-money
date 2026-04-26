@@ -74,6 +74,8 @@ export default {
       bodyData.client_id = clientId
       bodyData.secret = secret
 
+      const bodyJson = JSON.stringify(bodyData)
+
       // Strip all browser-origin headers so Plaid treats this as a server request
       const newHeaders = new Headers()
       newHeaders.set('Content-Type', 'application/json')
@@ -81,7 +83,7 @@ export default {
       const proxied = new Request(targetUrl, {
         method: request.method,
         headers: newHeaders,
-        body: request.method === 'POST' ? JSON.stringify(bodyData) : undefined,
+        body: request.method === 'POST' ? bodyJson : undefined,
       })
 
       const response = await fetch(proxied)

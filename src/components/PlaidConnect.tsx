@@ -4,12 +4,14 @@ import { useAppStore } from '../store/useAppStore'
 
 export function PlaidConnect({
   isLinked,
+  holdingsCount,
   onLinked,
   onUnlink,
   onRefresh,
 }: {
   accountId: number
   isLinked: boolean
+  holdingsCount?: number
   onLinked: (accessToken: string, itemId: string) => void
   onUnlink: () => void
   onRefresh?: () => void
@@ -19,12 +21,8 @@ export function PlaidConnect({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Fetch link_token from our proxy
   const generateToken = useCallback(async () => {
-    if (!lmProxyUrl) {
-      setError("No proxy URL configured")
-      return
-    }
+    if (!lmProxyUrl) { setError('No proxy URL configured in Settings'); return }
     setLoading(true)
     setError(null)
     try {
@@ -36,8 +34,8 @@ export function PlaidConnect({
           language: 'en',
           country_codes: ['US'],
           user: { client_user_id: 'dinnermoney-user' },
-          products: ['investments']
-        })
+          products: ['investments'],
+        }),
       })
       if (!res.ok) {
         const errData = await res.json().catch(() => null)
@@ -54,7 +52,7 @@ export function PlaidConnect({
   }, [lmProxyUrl])
 
   const { open, ready } = usePlaidLink({
-    token: linkToken!,
+    token: linkToken ?? '',
     onSuccess: async (public_token, _metadata) => {
       setLoading(true)
       try {
@@ -65,47 +63,54 @@ export function PlaidConnect({
         })
         if (!res.ok) {
           const errData = await res.json().catch(() => null)
-          throw new Error(errData?.error_message || `Exchange returned ${res.status}`)
+          const code = errData?.error_code ? `[${errData.error_code}] ` : ''
+          throw new Error(code + (errData?.error_message || `Exchange returned ${res.status}`))
         }
         const data = await res.json()
         onLinked(data.access_token, data.item_id)
       } catch (err: any) {
-        setError(err.message || 'Exchange failed')
+        setError(err.message || 'Token exchange failed')
       } finally {
         setLoading(false)
+        setLinkToken(null)
       }
     },
-    onExit: () => {
-      // User closed the widget without connecting
-      if (linkToken) setLinkToken(null)
-    }
+    onExit: () => setLinkToken(null),
   })
 
-  // When linkToken is ready, immediately open Plaid Link
   useEffect(() => {
-    if (ready && linkToken) {
-      open()
-    }
+    if (ready && linkToken) open()
   }, [ready, linkToken, open])
 
   if (isLinked) {
     return (
-      <div className="flex items-center gap-2 mt-2 bg-gray-50 dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
-        <span className="text-[12px] text-green-600 dark:text-green-400 font-medium flex items-center gap-1">
-          ✓ Plaid Synced
+      <div className="flex items-center gap-3">
+        <span className="flex items-center gap-1.5 text-[11.5px] text-green-600 dark:text-green-400 font-medium">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <circle cx="6" cy="6" r="6" fill="currentColor" opacity="0.15"/>
+            <path d="M3.5 6l1.8 1.8 3.2-3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Plaid linked
+          {holdingsCount != null && holdingsCount > 0 && (
+            <span className="text-[10.5px] text-gray-400 dark:text-gray-500 font-normal">
+              · {holdingsCount} holding{holdingsCount !== 1 ? 's' : ''}
+            </span>
+          )}
         </span>
-        <div className="flex gap-2 ml-auto">
+        <div className="flex items-center gap-2 ml-auto">
           {onRefresh && (
-            <button 
+            <button
               onClick={onRefresh}
-              className="text-[11px] text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:underline"
+              disabled={loading}
+              className="text-[11px] text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 disabled:opacity-40 transition-colors"
             >
-              Refresh
+              {loading ? 'Syncing…' : 'Refresh'}
             </button>
           )}
-          <button 
+          <span className="text-gray-200 dark:text-gray-700">|</span>
+          <button
             onClick={onUnlink}
-            className="text-[11px] text-red-500 hover:underline"
+            className="text-[11px] text-red-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
           >
             Disconnect
           </button>
@@ -115,26 +120,31 @@ export function PlaidConnect({
   }
 
   return (
-    <div className="flex flex-col gap-1 mt-2 bg-gray-50 dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-gray-600 dark:text-gray-300">
-          Sync holdings via Plaid
-        </span>
-        <label className="relative inline-flex items-center cursor-pointer">
-          <input 
-            type="checkbox" 
-            className="sr-only peer" 
-            checked={false}
-            onChange={(e) => {
-              if (e.target.checked) generateToken()
-            }}
-            disabled={loading}
-          />
-          <div className="w-7 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-        </label>
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[11px] text-gray-400 dark:text-gray-500">
+        Holdings &amp; cost basis via Plaid
+      </span>
+      <div className="flex flex-col items-end gap-1">
+        <button
+          onClick={generateToken}
+          disabled={loading || !lmProxyUrl}
+          className="flex items-center gap-1.5 text-[11.5px] px-2.5 py-1 rounded-[5px] border border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-40 transition-colors"
+        >
+          {loading ? (
+            <>
+              <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
+                <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1.5" strokeDasharray="6 6"/>
+              </svg>
+              Connecting…
+            </>
+          ) : (
+            'Connect Plaid'
+          )}
+        </button>
+        {error && (
+          <span className="text-[10px] text-red-500 max-w-[200px] text-right leading-tight">{error}</span>
+        )}
       </div>
-      {loading && <div className="text-[10px] text-gray-500">Initializing Plaid...</div>}
-      {error && <div className="text-[10px] text-red-500">{error}</div>}
     </div>
   )
 }
