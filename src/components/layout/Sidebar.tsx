@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
-import { fetchAllAccounts, mapLMType, LunchMoneyError } from '../../lib/lunchmoney'
+import { fetchAllAccounts, mapLMType } from '../../lib/lunchmoney'
 import type { Account } from '../../types'
 
 interface NavItem {
