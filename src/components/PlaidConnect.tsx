@@ -36,13 +36,13 @@ export function PlaidConnect({
           language: 'en',
           country_codes: ['US'],
           user: { client_user_id: 'dinnermoney-user' },
-          products: ['transactions'],
-          additional_consented_products: ['auth']
+          products: ['investments']
         })
       })
       if (!res.ok) {
         const errData = await res.json().catch(() => null)
-        throw new Error(errData?.error_message || `Proxy returned ${res.status}`)
+        const code = errData?.error_code ? `[${errData.error_code}] ` : ''
+        throw new Error(code + (errData?.error_message || `Proxy returned ${res.status}`))
       }
       const data = await res.json()
       setLinkToken(data.link_token)
