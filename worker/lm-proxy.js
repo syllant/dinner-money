@@ -1,22 +1,63 @@
 /**
- * DinnerMoney — LunchMoney CORS proxy
+ * DinnerMoney — LunchMoney & Plaid CORS proxy
  * Deploy as a Cloudflare Worker (free tier: 100k req/day).
- * This worker only forwards requests to dev.lunchmoney.app.
- * It adds CORS headers so the browser SPA can call it directly.
+ *
+ * Routes:
+ * - /plaid/* -> https://development.plaid.com/* (injects PLAID_CLIENT_ID and PLAID_SECRET)
+ * - /* -> https://dev.lunchmoney.app/*
+ *
  * No data is logged or stored.
  */
 
-const TARGET = 'https://dev.lunchmoney.app'
+const LM_TARGET = 'https://dev.lunchmoney.app'
+const PLAID_TARGET = 'https://production.plaid.com'
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders() })
     }
 
     const url = new URL(request.url)
-    const targetUrl = TARGET + url.pathname + url.search
+
+    // --- PLAID ROUTING ---
+    if (url.pathname.startsWith('/plaid/')) {
+      const plaidPath = url.pathname.replace('/plaid', '')
+      const targetUrl = PLAID_TARGET + plaidPath
+
+      // We must inject the client_id and secret into the JSON body for Plaid
+      let bodyData = {}
+      if (request.method === 'POST') {
+        try {
+          bodyData = await request.clone().json()
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      bodyData.client_id = typeof env.PLAID_CLIENT_ID === 'string' ? env.PLAID_CLIENT_ID.trim() : env.PLAID_CLIENT_ID
+      bodyData.secret = typeof env.PLAID_SECRET === 'string' ? env.PLAID_SECRET.trim() : env.PLAID_SECRET
+
+      // Strip all browser headers (Origin, Referer, Sec-*) so Plaid treats it as a server request
+      const newHeaders = new Headers()
+      newHeaders.set('Content-Type', 'application/json')
+
+      const proxied = new Request(targetUrl, {
+        method: request.method,
+        headers: newHeaders,
+        body: request.method === 'POST' ? JSON.stringify(bodyData) : undefined,
+      })
+
+      const response = await fetch(proxied)
+      return new Response(response.body, {
+        status: response.status,
+        headers: corsHeaders(),
+      })
+    }
+
+    // --- LUNCHMONEY ROUTING ---
+    const targetUrl = LM_TARGET + url.pathname + url.search
 
     const proxied = new Request(targetUrl, {
       method: request.method,
@@ -27,9 +68,6 @@ export default {
     const response = await fetch(proxied)
 
     // Copy upstream headers, stripping any CORS headers LunchMoney sends.
-    // LunchMoney returns Access-Control-Allow-Credentials: true which is
-    // incompatible with Access-Control-Allow-Origin: * and causes browsers
-    // to reject the response. We replace all CORS headers with our own.
     const headers = new Headers()
     for (const [key, value] of response.headers) {
       if (!key.toLowerCase().startsWith('access-control-')) {

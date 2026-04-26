@@ -33,6 +33,16 @@ export interface AssetAllocation {
 
 export type AccountType = 'investment' | 'retirement' | 'cash' | 'real_estate' | 'loan' | 'credit' | 'other'
 
+export interface PlaidHolding {
+  ticker: string | null
+  name: string
+  quantity: number
+  institutionPrice: number     // live price from broker
+  institutionValue: number     // total value
+  costBasis: number | null     // original cost, if provided
+  currency: string
+}
+
 export interface Account {
   id: number             // LunchMoney account ID
   lmId: number
@@ -47,6 +57,11 @@ export interface Account {
   includedInPlanning?: boolean    // false to exclude from net worth / simulation (default true)
   interestRate?: number  // % APY, for cash/loan accounts
   dueDate?: number       // day of month (1–31), for credit accounts
+
+  // Plaid Integration
+  plaidItemId?: string
+  plaidAccessToken?: string
+  holdings?: PlaidHolding[]
 }
 
 // ─── Pensions ─────────────────────────────────────────────────────────────────

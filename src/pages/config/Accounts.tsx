@@ -6,6 +6,8 @@ import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Tab
 import { Badge } from '../../components/ui/Badge'
 import { fetchAllAccounts, mapLMType, LunchMoneyError } from '../../lib/lunchmoney'
 import { formatCurrency } from '../../lib/format'
+import { PlaidConnect } from '../../components/PlaidConnect'
+import { fetchPlaidHoldings } from '../../lib/plaid'
 import type { Account } from '../../types'
 
 // ─── Type chip config ──────────────────────────────────────────────────────────
@@ -185,8 +187,26 @@ export default function Accounts() {
           interestRate: ex.interestRate,
           dueDate: ex.dueDate,
           ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}),
+          plaidAccessToken: ex.plaidAccessToken,
+          plaidItemId: ex.plaidItemId,
+          holdings: ex.holdings,
         }
       })
+
+      // Sync Plaid holdings for linked accounts
+      if (lmProxyUrl) {
+        for (const acc of merged) {
+          if (acc.plaidAccessToken) {
+            try {
+              acc.holdings = await fetchPlaidHoldings(lmProxyUrl, acc.plaidAccessToken)
+              console.log(`[Plaid] Successfully fetched holdings for ${acc.name}`)
+            } catch (err) {
+              console.error(`[Plaid] Network or Proxy failure for ${acc.name}:`, err)
+            }
+          }
+        }
+      }
+
       setAccounts(merged)
     } catch (err) {
       if (err instanceof LunchMoneyError) {
@@ -214,6 +234,22 @@ export default function Accounts() {
   function handleSort(col: SortKey) {
     if (sortKey === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(col); setSortDir('asc') }
+  }
+
+  async function syncSinglePlaid(accountId: number, accessToken: string) {
+    if (!lmProxyUrl) return
+    const acc = useAppStore.getState().accounts.find(a => a.id === accountId)
+    if (!acc) return
+    setSyncing(true)
+    try {
+      const holdings = await fetchPlaidHoldings(lmProxyUrl, accessToken)
+      upsertAccount({ ...acc, plaidAccessToken: accessToken, holdings })
+    } catch (err) {
+      console.error(`[Plaid] Failed to sync ${acc.name}:`, err)
+      alert('Failed to refresh Plaid holdings. Check console.')
+    } finally {
+      setSyncing(false)
+    }
   }
 
   const sorted = [...accounts].sort((a, b) => {
@@ -271,7 +307,15 @@ export default function Accounts() {
               <TableRow key={acc.id} dimmed={!included}>
                 <div className={`grid ${COLS} gap-2 items-center`}>
                   {/* Account name */}
-                  <span className="font-medium truncate">{acc.name}</span>
+                  <span className="font-medium truncate flex items-center gap-1.5">
+                    {acc.name}
+                    {['investment', 'retirement', 'cash'].includes(acc.type) && !acc.plaidAccessToken && (
+                      <span title="Can be synced with Plaid in Edit mode" className="text-[10px] opacity-50">💡</span>
+                    )}
+                    {acc.plaidAccessToken && (
+                      <span title="Plaid synced" className="text-[10px] text-green-500">✓P</span>
+                    )}
+                  </span>
 
                   {/* Balance */}
                   <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
@@ -287,7 +331,21 @@ export default function Accounts() {
 
                   {/* Characteristics */}
                   {editingId === acc.id ? (
-                    <CharacteristicsEdit acc={acc} onUpdate={patch => upsertAccount({ ...acc, ...patch })} />
+                    <div className="flex flex-col gap-2 py-1">
+                      <CharacteristicsEdit acc={acc} onUpdate={patch => upsertAccount({ ...acc, ...patch })} />
+                      {['investment', 'retirement', 'cash'].includes(acc.type) && (
+                        <PlaidConnect
+                          accountId={acc.id}
+                          isLinked={!!acc.plaidAccessToken}
+                          onLinked={async (token, itemId) => {
+                            upsertAccount({ ...acc, plaidAccessToken: token, plaidItemId: itemId })
+                            await syncSinglePlaid(acc.id, token)
+                          }}
+                          onUnlink={() => upsertAccount({ ...acc, plaidAccessToken: undefined, plaidItemId: undefined, holdings: undefined })}
+                          onRefresh={acc.plaidAccessToken ? () => syncSinglePlaid(acc.id, acc.plaidAccessToken!) : undefined}
+                        />
+                      )}
+                    </div>
                   ) : (
                     <CharacteristicsView acc={acc} />
                   )}
