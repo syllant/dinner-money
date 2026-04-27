@@ -19,7 +19,7 @@ export async function fetchTickerDividends(apiKey: string, ticker: string): Prom
       paymentDate: d.payment_date as string,
       amount: parseFloat(d.amount) || 0,
     }))
-    .filter(d => d.amount > 0 && d.paymentDate)
+    .filter(d => d.amount > 0 && d.paymentDate && !isNaN(new Date(d.paymentDate).getTime()))
     .sort((a, b) => b.paymentDate.localeCompare(a.paymentDate))
 }
 
@@ -59,7 +59,11 @@ export function projectDividends(
 ): ProjectedDividend[] {
   if (history.length === 0 || sharesHeld <= 0) return []
 
-  const recent = history.slice(0, 8)  // most recent 8 payments
+  // Guard against "None" or invalid payment dates that AV sometimes returns
+  const validHistory = history.filter(d => d.paymentDate && !isNaN(new Date(d.paymentDate).getTime()))
+  if (validHistory.length === 0) return []
+
+  const recent = validHistory.slice(0, 8)  // most recent 8 payments
   const avgAmount = recent.reduce((s, d) => s + d.amount, 0) / recent.length
   const freqDays = inferFrequencyDays(recent)
 
