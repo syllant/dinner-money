@@ -25,7 +25,7 @@ interface UnifiedExpense {
 
 const CATEGORY_OPTIONS = [
   'Medical coverage', 'Medical', 'Housing', 'Food', 'Transport',
-  'Education', 'Travel', 'Entertainment', 'Living', 'Other',
+  'Education', 'Travel', 'Entertainment', 'Default', 'Other',
 ]
 
 const CATEGORY_ORDER: Record<string, number> = Object.fromEntries(CATEGORY_OPTIONS.map((c, i) => [c, i]))
@@ -54,7 +54,7 @@ function flattenExpenses(
   const fromExpenses: UnifiedExpense[] = expenses.map(e => ({
     id: e.id, name: e.name, amount: e.amount, currency: e.currency as 'USD' | 'EUR',
     frequency: e.frequency as UnifiedExpense['frequency'], startDate: e.startDate, endDate: e.endDate,
-    category: e.category || 'Other', source: 'expense',
+    category: e.category === 'Living' ? 'Default' : (e.category || 'Default'), source: 'expense',
   }))
   return [...fromCoverage, ...fromMedical, ...fromExpenses]
     .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.startDate.localeCompare(b.startDate))
@@ -186,7 +186,7 @@ export default function Expenses() {
 
   const all = flattenExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [])
 
-  const categories = Array.from(new Set(all.map(e => e.category)))
+  const categories = Array.from(new Set(['Default', ...all.map(e => e.category)]))
     .sort((a, b) => categoryOrder(a) - categoryOrder(b))
 
   function saveItem(item: UnifiedExpense) {
@@ -226,12 +226,6 @@ export default function Expenses() {
           />
         )}
 
-        {all.length === 0 && !editing && (
-          <div className="text-[12px] text-gray-400 py-4 text-center">
-            No expenses yet. Click "+ Add expense" to get started.
-          </div>
-        )}
-
         {categories.map(cat => {
           const items = all.filter(e => e.category === cat)
           const totalEUR = items.reduce((s, e) => {
@@ -248,18 +242,22 @@ export default function Expenses() {
                   {totalEUR > 0 ? `~${formatCurrency(Math.round(totalEUR), 'EUR')}/mo` : ''}
                 </span>
               </div>
-              <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-                <div className="px-3">
-                  {items.map(item => (
-                    <ExpenseItem
-                      key={item.id}
-                      item={item}
-                      onEdit={() => setEditing(item)}
-                      onDelete={() => deleteItem(item)}
-                    />
-                  ))}
+              {items.length === 0 ? (
+                <div className="text-[11.5px] text-gray-400 italic px-1 py-1">No entries yet.</div>
+              ) : (
+                <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
+                  <div className="px-3">
+                    {items.map(item => (
+                      <ExpenseItem
+                        key={item.id}
+                        item={item}
+                        onEdit={() => setEditing(item)}
+                        onDelete={() => deleteItem(item)}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </section>
           )
         })}

@@ -3,7 +3,7 @@ import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank, ArrowLeftRight,
   FileText, User, CreditCard, Clock, Home, Receipt,
-  Banknote, Activity, Settings, RefreshCw,
+  Banknote, Settings, RefreshCw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
@@ -17,7 +17,7 @@ interface NavItem {
 }
 
 const insightItems: NavItem[] = [
-  { to: '/', label: 'Dashboard', icon: <LayoutDashboard size={13} /> },
+  { to: '/', label: 'Overview', icon: <LayoutDashboard size={13} /> },
   { to: '/investments', label: 'Investments', icon: <TrendingUp size={13} /> },
   { to: '/cash', label: 'Cash & savings', icon: <PiggyBank size={13} /> },
   { to: '/income-expenses', label: 'Income & expenses', icon: <ArrowLeftRight size={13} /> },
@@ -31,7 +31,6 @@ const configItems: NavItem[] = [
   { to: '/config/real-estate', label: 'Real estate', icon: <Home size={13} /> },
   { to: '/config/income', label: 'Income', icon: <Banknote size={13} /> },
   { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
-  { to: '/config/simulation', label: 'Simulation', icon: <Activity size={13} /> },
 ]
 
 function SidebarNavItem({ item }: { item: NavItem }) {
@@ -70,12 +69,12 @@ function SyncStatus() {
         ...manual.filter(a => !a.closed_on).map(a => {
           const type = mapLMType(a.type_name)
           const rawBalance = parseFloat(a.balance)
-          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: type === 'loan' ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: true }
+          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: (type === 'loan' || type === 'credit') ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: true }
         }),
         ...synced.map(a => {
           const type = mapLMType(a.subtype || a.type)
           const rawBalance = parseFloat(a.balance)
-          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: type === 'loan' ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: false }
+          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: (type === 'loan' || type === 'credit') ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: false }
         }),
       ]
       const existing = new Map(useAppStore.getState().accounts.map(a => [a.id, a]))
@@ -88,6 +87,8 @@ function SyncStatus() {
           includedInPlanning: ex.includedInPlanning,
           interestRate: ex.interestRate,
           dueDate: ex.dueDate,
+          fxSplitEUR: ex.fxSplitEUR,
+        fxSplitEURRef: ex.fxSplitEURRef,
           ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}),
         }
       })

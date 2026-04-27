@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Settings2 } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import { MetricCard } from '../components/ui/MetricCard'
 import { Card, CardTitle } from '../components/ui/Card'
@@ -7,11 +8,12 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { FlowRow, monthLabel as flowMonthLabel, recurrenceNote } from '../components/ui/FlowRow'
 import { formatCompact, formatCurrency } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
+import { projectedAnnualDividendsEUR, DIVIDEND_MONTHS } from '../lib/dividends'
 import {
   ComposedChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
   BarChart, Bar, Cell, ReferenceArea,
 } from 'recharts'
-import type { SimulationResult, Expense, PensionEstimate, Windfall, UserProfile, MedicalCoverage, MedicalExpense } from '../types'
+import type { SimulationResult, Expense, PensionEstimate, Windfall, UserProfile, MedicalCoverage, MedicalExpense, Account, MonteCarloConfig } from '../types'
 
 // ─── Life event data ──────────────────────────────────────────────────────────
 
@@ -57,6 +59,43 @@ function allExpensesOf(
   medicalExpenses: MedicalExpense[],
 ): ExpLike[] {
   return [...expenses, ...(medicalCoverages ?? []), ...(medicalExpenses ?? [])]
+}
+
+// ─── Simulation settings panel ────────────────────────────────────────────────
+
+const SIM_SLIDERS: Array<{ label: string; key: keyof MonteCarloConfig; min: number; max: number; step: number; unit?: string }> = [
+  { label: 'Equity return (mean)', key: 'equityMeanReturn', min: 0, max: 12, step: 0.5 },
+  { label: 'Equity volatility', key: 'equityStdDev', min: 5, max: 25, step: 0.5 },
+  { label: 'Bond return (mean)', key: 'bondMeanReturn', min: -2, max: 6, step: 0.25 },
+  { label: 'Bond volatility', key: 'bondStdDev', min: 1, max: 12, step: 0.25 },
+  { label: 'EUR inflation', key: 'inflationEUR', min: 0, max: 6, step: 0.25 },
+  { label: 'EUR/USD drift', key: 'eurUsdDrift', min: -3, max: 3, step: 0.25 },
+  { label: 'EUR/USD volatility', key: 'eurUsdVolatility', min: 2, max: 15, step: 0.5 },
+  { label: 'Simulations', key: 'numSimulations', min: 1000, max: 50000, step: 1000, unit: '' },
+]
+
+function SimulationSettingsPanel({ config, onChange }: {
+  config: MonteCarloConfig
+  onChange: (patch: Partial<MonteCarloConfig>) => void
+}) {
+  return (
+    <div className="mb-3 pb-3 border-b border-gray-100 dark:border-gray-700">
+      <div className="grid grid-cols-2 gap-x-8 gap-y-[7px]">
+        {SIM_SLIDERS.map(({ label, key, min, max, step, unit = '%' }) => (
+          <div key={key} className="flex items-center gap-2 text-[11px]">
+            <span className="text-gray-500 dark:text-gray-400 min-w-[140px]">{label}</span>
+            <input type="range" min={min} max={max} step={step}
+              value={config[key] as number}
+              onChange={e => onChange({ [key]: parseFloat(e.target.value) })}
+              className="flex-1 h-[3px] accent-blue-500" />
+            <span className="text-gray-700 dark:text-gray-300 min-w-[44px] text-right font-medium">
+              {(config[key] as number).toFixed(step < 1 ? (step < 0.1 ? 2 : 2) : 0)}{unit}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 // ─── Lifetime chart (NW area + annual I/E bars, dual Y-axis) ──────────────────
@@ -130,17 +169,21 @@ function LifetimeTooltip({ active, payload, label }: {
   )
 }
 
-function LifetimeChart({ result, initialNW, expenses, medicalCoverages, medicalExpenses, pensions, profile }: {
+function LifetimeChart({ result, initialNW, expenses, medicalCoverages, medicalExpenses, pensions, windfalls, accounts, profile }: {
   result: SimulationResult
   initialNW: number
   expenses: Expense[]
   medicalCoverages: MedicalCoverage[]
   medicalExpenses: MedicalExpense[]
   pensions: PensionEstimate[]
+  windfalls: Windfall[]
+  accounts: Account[]
   profile: UserProfile
 }) {
   const events = useLifeEvents()
   const allExp = allExpensesOf(expenses, medicalCoverages, medicalExpenses)
+  const currentYear = new Date().getFullYear()
+  const annualProjectedDiv = Math.round(projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE))
 
   const eventsByYear = events.reduce<Record<number, LifeEvent[]>>((acc, ev) => {
     if (!acc[ev.year]) acc[ev.year] = []
@@ -169,6 +212,21 @@ function LifetimeChart({ result, initialNW, expenses, medicalCoverages, medicalE
       for (const p of pensions) {
         const pAge = p.person === 'self' ? selfAge : y - profile.spouseBirthYear
         if (pAge >= p.startAge) incomeItems.push({ label: p.label, amount: p.monthlyAmount * 12, currency: p.currency })
+      }
+      for (const w of windfalls) {
+        if (parseInt(w.date.split('-')[0]) === y) incomeItems.push({ label: w.name, amount: w.amount, currency: w.currency })
+      }
+      if (y > currentYear && annualProjectedDiv > 0) {
+        incomeItems.push({ label: 'Dividends (est.)', amount: annualProjectedDiv, currency: 'EUR' })
+      }
+      for (const acc of accounts) {
+        if (acc.interestRate && acc.interestRate > 0 && acc.balance > 0) {
+          incomeItems.push({ label: `${acc.name} interest`, amount: acc.balance * acc.interestRate / 100, currency: acc.currency })
+        }
+        if (acc.dividends) {
+          const annual = acc.dividends.filter(d => parseInt(d.date.split('-')[0]) === y).reduce((s, d) => s + d.amount, 0)
+          if (annual > 0) incomeItems.push({ label: `${acc.name} dividends`, amount: annual, currency: acc.dividends[0]?.currency ?? acc.currency })
+        }
       }
       for (const exp of allExp) {
         const s = parseInt(exp.startDate.split('-')[0])
@@ -259,6 +317,7 @@ function buildMonthlyData(
   medicalExpenses: MedicalExpense[],
   pensions: PensionEstimate[],
   windfalls: Windfall[],
+  accounts: Account[],
   profile: UserProfile,
   today: Date,
   pastMonths = 6,
@@ -268,6 +327,8 @@ function buildMonthlyData(
   const points: MonthlyPoint[] = []
   const cy = today.getFullYear()
   const cm = today.getMonth() + 1
+  const currentYM = `${cy}-${String(cm).padStart(2, '0')}`
+  const quarterlyProjectedDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE) / 4
 
   for (let offset = -pastMonths; offset <= futureMonths; offset++) {
     const totalM = cm + offset
@@ -282,6 +343,27 @@ function buildMonthlyData(
       const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
       if (personBY + p.startAge > year) continue
       incomeItems.push({ label: p.label, amount: p.monthlyAmount, currency: p.currency, amountEUR: toEUR(p.monthlyAmount, p.currency) })
+    }
+
+    for (const acc of accounts) {
+      if (acc.interestRate && acc.interestRate > 0 && acc.balance > 0) {
+        const monthly = acc.balance * acc.interestRate / 100 / 12
+        incomeItems.push({ label: `${acc.name} interest`, amount: monthly, currency: acc.currency, amountEUR: toEUR(monthly, acc.currency) })
+      }
+      if (acc.dividends) {
+        for (const div of acc.dividends) {
+          const dY = parseInt(div.date.split('-')[0])
+          const dM = parseInt(div.date.split('-')[1])
+          if (dY === year && dM === month) {
+            incomeItems.push({ label: `${div.securityName} dividend`, amount: div.amount, currency: div.currency, amountEUR: toEUR(div.amount, div.currency) })
+          }
+        }
+      }
+    }
+
+    // Projected quarterly dividends for future months (Q1=Mar, Q2=Jun, Q3=Sep, Q4=Dec)
+    if (ym >= currentYM && DIVIDEND_MONTHS.has(month) && quarterlyProjectedDiv > 0) {
+      incomeItems.push({ label: 'Dividends (est.)', amount: quarterlyProjectedDiv, currency: 'EUR', amountEUR: quarterlyProjectedDiv })
     }
 
     // Include windfall income in the month of the windfall (treat YYYY or YYYY-MM)
@@ -454,6 +536,7 @@ function buildUpcomingExpenses(
 function buildUpcomingIncome(
   pensions: PensionEstimate[],
   windfalls: Windfall[],
+  accounts: Account[],
   profile: UserProfile,
   today: Date,
   futureMonths = 6,
@@ -463,15 +546,20 @@ function buildUpcomingIncome(
   const cy = today.getFullYear()
   const cm = today.getMonth() + 1
 
+  const quarterlyProjectedDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE) / 4
+
   for (let i = 0; i < futureMonths; i++) {
     const totalM = cm + i
     const year = cy + Math.floor((totalM - 1) / 12)
     const month = safeMonth(totalM)
+    const ym = `${year}-${String(month).padStart(2, '0')}`
     for (const p of pensions) {
       const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
       if (personBY + p.startAge > year) continue
-      const ym = `${year}-${String(month).padStart(2, '0')}`
       items.push({ key: `pension-${p.id}-${ym}`, date: ym, label: p.label, note: 'monthly pension', amount: p.monthlyAmount, currency: p.currency, recurring: true })
+    }
+    if (DIVIDEND_MONTHS.has(month) && quarterlyProjectedDiv > 0) {
+      items.push({ key: `div-proj-${ym}`, date: ym, label: 'Dividends (est.)', note: 'quarterly projection', amount: quarterlyProjectedDiv, currency: 'EUR', recurring: true })
     }
   }
 
@@ -555,8 +643,10 @@ function UpcomingPanel({ title, items, colorClass, sign, emptyMsg }: {
 export default function Dashboard() {
   const {
     accounts, simulationResult, simulationRunning, setSimulationRunning, setSimulationResult,
-    profile, expenses, medicalCoverages, medicalExpenses, pensions, windfalls, realEstateEvents, monteCarloConfig,
+    profile, expenses, medicalCoverages, medicalExpenses, pensions, windfalls, realEstateEvents,
+    monteCarloConfig, setMonteCarloConfig,
   } = useAppStore()
+  const [showSimSettings, setShowSimSettings] = useState(false)
 
   const includedAccounts = accounts.filter(a => a.includedInPlanning !== false)
 
@@ -593,12 +683,12 @@ export default function Dashboard() {
   const result = simulationResult
   const today = new Date()
   const upcomingExpenses = buildUpcomingExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [], today, 6, 30)
-  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, profile, today, 6, 30)
-  const monthlyData = buildMonthlyData(expenses, medicalCoverages ?? [], medicalExpenses ?? [], pensions, windfalls, profile, today, 6, 6)
+  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, accounts, profile, today, 6, 30)
+  const monthlyData = buildMonthlyData(expenses, medicalCoverages ?? [], medicalExpenses ?? [], pensions, windfalls, accounts, profile, today, 6, 6)
 
   return (
     <div>
-      <PageHeader title="Dashboard" />
+      <PageHeader title="Overview" />
 
       <div className="p-4 space-y-4">
         {/* Metric cards */}
@@ -632,10 +722,22 @@ export default function Dashboard() {
             <span className="text-[11.5px] font-medium text-gray-500 dark:text-gray-400">
               Lifetime projection
             </span>
-            <Button variant="default" onClick={runSimulation} disabled={simulationRunning}>
-              {simulationRunning ? 'Running…' : '↺ Recalculate'}
-            </Button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowSimSettings(v => !v)}
+                title="Simulation settings"
+                className={`p-[5px] rounded-[4px] transition-colors ${showSimSettings ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-600 dark:hover:text-gray-300'}`}
+              >
+                <Settings2 size={13} />
+              </button>
+              <Button variant="default" onClick={runSimulation} disabled={simulationRunning}>
+                {simulationRunning ? 'Running…' : '↺ Recalculate'}
+              </Button>
+            </div>
           </div>
+          {showSimSettings && (
+            <SimulationSettingsPanel config={monteCarloConfig} onChange={setMonteCarloConfig} />
+          )}
           {result ? (
             <LifetimeChart
               result={result}
@@ -644,6 +746,8 @@ export default function Dashboard() {
               medicalCoverages={medicalCoverages ?? []}
               medicalExpenses={medicalExpenses ?? []}
               pensions={pensions}
+              windfalls={windfalls}
+              accounts={accounts}
               profile={profile}
             />
           ) : (

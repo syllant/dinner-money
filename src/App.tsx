@@ -12,7 +12,6 @@ import Pensions from './pages/config/Pensions'
 import RealEstate from './pages/config/RealEstate'
 import Expenses from './pages/config/Expenses'
 import Windfalls from './pages/config/Windfalls'
-import Simulation from './pages/config/Simulation'
 import Settings from './pages/config/Settings'
 
 /** Redirects to /settings when no API key is configured yet */
@@ -43,7 +42,6 @@ export default function App() {
           <Route path="/config/income" element={<Windfalls />} />
           <Route path="/config/windfalls" element={<Windfalls />} />
           <Route path="/config/expenses" element={<Expenses />} />
-          <Route path="/config/simulation" element={<Simulation />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

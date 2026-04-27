@@ -25,11 +25,12 @@ export interface FlowRowProps {
   colorClass: string
   sign: '+' | '−'
   tag?: React.ReactNode
+  dimmed?: boolean
 }
 
-export function FlowRow({ dateLabel, description, note, recurring, amount, currency, colorClass, sign, tag }: FlowRowProps) {
+export function FlowRow({ dateLabel, description, note, recurring, amount, currency, colorClass, sign, tag, dimmed }: FlowRowProps) {
   return (
-    <div className="flex items-center gap-2 py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0">
+    <div className={`flex items-center gap-2 py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0${dimmed ? ' opacity-40' : ''}`}>
       <span className="text-[10px] text-gray-400 shrink-0 w-[56px]">{dateLabel}</span>
       <span className="w-[14px] shrink-0 text-[11px] text-gray-400 text-center" title={recurring ? 'Recurring' : ''}>{recurring ? '↻' : ''}</span>
       <span className="flex-1 min-w-0 truncate">

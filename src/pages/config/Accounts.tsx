@@ -6,8 +6,10 @@ import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Tab
 import { Badge } from '../../components/ui/Badge'
 import { fetchAllAccounts, mapLMType, LunchMoneyError } from '../../lib/lunchmoney'
 import { formatCurrency } from '../../lib/format'
+import { convertToBase, DEFAULT_EUR_USD_RATE } from '../../lib/currency'
+import { NumericInput } from '../../components/ui/NumericInput'
 import { PlaidConnect } from '../../components/PlaidConnect'
-import { fetchPlaidHoldings } from '../../lib/plaid'
+import { fetchPlaidHoldings, fetchPlaidInvestmentData, computeAllocationFromHoldings } from '../../lib/plaid'
 import type { Account } from '../../types'
 
 // ─── Type chip config ──────────────────────────────────────────────────────────
@@ -29,7 +31,7 @@ const TYPE_META: Record<Account['type'], { label: string; variant: BadgeVariant 
 type SortKey = 'name' | 'balance' | 'currency' | 'type'
 
 function SortBtn({ col, label, sortKey, sortDir, onClick }: {
-  col: SortKey; label: string; sortKey: SortKey | null; sortDir: 'asc' | 'desc'; onClick: () => void
+  col: SortKey; label: string; sortKey: SortKey; sortDir: 'asc' | 'desc'; onClick: () => void
 }) {
   const active = sortKey === col
   return (
@@ -82,6 +84,13 @@ function CharacteristicsEdit({ acc, onUpdate }: {
   onUpdate: (patch: Partial<Account>) => void
 }) {
   if (acc.type === 'investment' || acc.type === 'retirement') {
+    if (acc.plaidAccessToken) {
+      return (
+        <div className="text-[11px] text-gray-400 dark:text-gray-500 italic">
+          Allocation auto-computed from Plaid holdings
+        </div>
+      )
+    }
     return (
       <div className="flex gap-1 text-[11px]">
         <label className="flex items-center gap-1">
@@ -135,8 +144,9 @@ export default function Accounts() {
   const [editingId, setEditingId] = useState<number | null>(null)
 
   useEffect(() => { if (lmApiKey) syncFromLM() }, []) // eslint-disable-line
-  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [filterType, setFilterType] = useState<Account['type'] | null>(null)
 
   async function syncFromLM() {
     if (!lmApiKey) { setSyncError('No API key — configure it in Settings'); return }
@@ -152,7 +162,7 @@ export default function Accounts() {
           return {
             id: a.id, lmId: a.id,
             name: a.display_name ?? a.name,
-            balance: type === 'loan' ? -rawBalance : rawBalance,
+            balance: (type === 'loan' || type === 'credit') ? -rawBalance : rawBalance,
             currency: a.currency,
             type,
             allocation: { equity: 0, bonds: 0, cash: 100 },
@@ -166,7 +176,7 @@ export default function Accounts() {
           return {
             id: a.id, lmId: a.id,
             name: a.display_name ?? a.name,
-            balance: type === 'loan' ? -rawBalance : rawBalance,
+            balance: (type === 'loan' || type === 'credit') ? -rawBalance : rawBalance,
             currency: a.currency,
             type,
             allocation: { equity: 0, bonds: 0, cash: 100 },
@@ -189,19 +199,33 @@ export default function Accounts() {
           ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}),
           plaidAccessToken: ex.plaidAccessToken,
           plaidItemId: ex.plaidItemId,
+          fxSplitEUR: ex.fxSplitEUR,
+          fxSplitEURRef: ex.fxSplitEURRef,
           holdings: ex.holdings,
         }
       })
 
-      // Sync Plaid holdings for linked accounts
+      // Sync Plaid data for linked accounts
       if (lmProxyUrl) {
         for (const acc of merged) {
           if (acc.plaidAccessToken) {
             try {
               acc.holdings = await fetchPlaidHoldings(lmProxyUrl, acc.plaidAccessToken)
-              console.log(`[Plaid] Successfully fetched holdings for ${acc.name}`)
+              acc.allocation = computeAllocationFromHoldings(acc.holdings)
             } catch (err) {
-              console.error(`[Plaid] Network or Proxy failure for ${acc.name}:`, err)
+              console.error(`[Plaid] Holdings sync failed for ${acc.name}:`, err)
+            }
+            try {
+              const txData = await fetchPlaidInvestmentData(lmProxyUrl, acc.plaidAccessToken)
+              acc.dividends = txData.dividends
+              if (acc.holdings) {
+                acc.holdings = acc.holdings.map(h => ({
+                  ...h,
+                  purchaseDate: h.ticker ? txData.buyDates[h.ticker] ?? undefined : undefined,
+                }))
+              }
+            } catch (err) {
+              console.error(`[Plaid] Investment data sync failed for ${acc.name}:`, err)
             }
           }
         }
@@ -243,17 +267,27 @@ export default function Accounts() {
     setSyncing(true)
     try {
       const holdings = await fetchPlaidHoldings(lmProxyUrl, accessToken)
-      upsertAccount({ ...acc, plaidAccessToken: accessToken, holdings })
-    } catch (err) {
-      console.error(`[Plaid] Failed to sync ${acc.name}:`, err)
-      alert('Failed to refresh Plaid holdings. Check console.')
+      const allocation = computeAllocationFromHoldings(holdings)
+      let dividends = acc.dividends
+      let annotatedHoldings = holdings
+      try {
+        const txData = await fetchPlaidInvestmentData(lmProxyUrl, accessToken)
+        dividends = txData.dividends
+        annotatedHoldings = holdings.map(h => ({
+          ...h,
+          purchaseDate: h.ticker ? txData.buyDates[h.ticker] ?? undefined : undefined,
+        }))
+      } catch (_) {}
+      upsertAccount({ ...acc, plaidAccessToken: accessToken, holdings: annotatedHoldings, allocation, dividends })
+    } catch (err: any) {
+      alert(`Failed to refresh Plaid holdings: ${err.message}`)
     } finally {
       setSyncing(false)
     }
   }
 
-  const sorted = [...accounts].sort((a, b) => {
-    if (!sortKey) return 0
+  const filtered = filterType ? accounts.filter(a => a.type === filterType) : accounts
+  const sorted = [...filtered].sort((a, b) => {
     let av: string | number, bv: string | number
     if (sortKey === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase() }
     else if (sortKey === 'balance') { av = a.balance; bv = b.balance }
@@ -288,6 +322,30 @@ export default function Accounts() {
           </Banner>
         )}
         {syncError && <Banner variant="warning">⚠ {syncError}</Banner>}
+
+        {/* Type filter pills */}
+        {accounts.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {([null, 'investment', 'retirement', 'cash', 'loan', 'credit', 'real_estate', 'other'] as const).map(t => {
+              const count = t ? accounts.filter(a => a.type === t).length : accounts.length
+              if (count === 0) return null
+              const active = filterType === t
+              return (
+                <button
+                  key={t ?? 'all'}
+                  onClick={() => setFilterType(active ? null : t)}
+                  className={`text-[11px] px-2.5 py-[3px] rounded-full border transition-colors ${
+                    active
+                      ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 border-gray-900 dark:border-white font-medium'
+                      : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500'
+                  }`}
+                >
+                  {t ? TYPE_META[t].label : 'All'} <span className="opacity-50">{count}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         <Table>
           <TableHead>
@@ -388,6 +446,50 @@ export default function Accounts() {
                         </select>
                       </div>
                     </div>
+
+                    {/* Multi-currency EUR split (e.g. IBKR consolidates EUR cash into CUR:USD) */}
+                    {acc.currency.toUpperCase() !== 'EUR' && (() => {
+                      const curUSDHolding = acc.holdings?.find(h => h.ticker === 'CUR:USD')
+                      const currentRef = curUSDHolding ? curUSDHolding.institutionValue : acc.balance
+                      const hasChanged = acc.fxSplitEUR != null && acc.fxSplitEUR > 0
+                        && acc.fxSplitEURRef != null
+                        && Math.abs(currentRef - acc.fxSplitEURRef) / Math.max(1, acc.fxSplitEURRef) > 0.01
+                      const eurInAccCurrency = acc.fxSplitEUR
+                        ? convertToBase(acc.fxSplitEUR, 'EUR', acc.currency as 'EUR' | 'USD', DEFAULT_EUR_USD_RATE)
+                        : 0
+                      return (
+                        <div className="flex flex-col gap-1.5 text-[11px]">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-500">
+                              {curUSDHolding
+                                ? `EUR in CUR:USD (${formatCurrency(curUSDHolding.institutionValue, 'USD')} total)`
+                                : `EUR portion of ${acc.currency.toUpperCase()} balance`}
+                            </span>
+                            <NumericInput
+                              className="w-24 h-[26px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800 text-[11px]"
+                              placeholder="0"
+                              value={acc.fxSplitEUR ?? null}
+                              onChange={val => upsertAccount({ ...acc, fxSplitEUR: val, fxSplitEURRef: val != null ? currentRef : undefined })}
+                            />
+                            <span className="text-gray-400">EUR</span>
+                            {acc.fxSplitEUR != null && acc.fxSplitEUR > 0 && (
+                              <span className="text-gray-400">
+                                → {formatCurrency(acc.fxSplitEUR, 'EUR')} EUR
+                                · {formatCurrency(Math.max(0, acc.balance - eurInAccCurrency), acc.currency)} {acc.currency.toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+                          {hasChanged && (
+                            <div className="text-amber-600 dark:text-amber-400 text-[10.5px]">
+                              ⚠ CUR:USD position changed ({formatCurrency(acc.fxSplitEURRef!, 'USD')} → {formatCurrency(currentRef, 'USD')}) — verify the EUR amount is still accurate
+                            </div>
+                          )}
+                          {(!acc.fxSplitEUR || acc.fxSplitEUR === 0) && (
+                            <span className="text-gray-400 text-[10px] italic">Set to split currency exposure for multi-currency accounts</span>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {/* Plaid section */}
                     {plaidEligible && (

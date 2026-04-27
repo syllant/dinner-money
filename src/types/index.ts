@@ -41,6 +41,16 @@ export interface PlaidHolding {
   institutionValue: number     // total value
   costBasis: number | null     // original cost, if provided
   currency: string
+  securityType: string         // 'equity' | 'etf' | 'mutual fund' | 'fixed income' | 'cash' | etc.
+  purchaseDate?: string        // YYYY-MM-DD, most recent buy transaction date (from investment history)
+}
+
+export interface PlaidDividend {
+  securityName: string
+  ticker: string | null
+  amount: number
+  currency: string
+  date: string                 // YYYY-MM-DD
 }
 
 export interface Account {
@@ -62,6 +72,11 @@ export interface Account {
   plaidItemId?: string
   plaidAccessToken?: string
   holdings?: PlaidHolding[]
+  dividends?: PlaidDividend[]
+
+  // Multi-currency override (e.g. IBKR reports all cash as CUR:USD but holds EUR too)
+  fxSplitEUR?: number     // EUR amount held in this account (absolute, not a %)
+  fxSplitEURRef?: number  // reference balance (CUR:USD value or total balance) when fxSplitEUR was last set — used to detect stale values
 }
 
 // ─── Pensions ─────────────────────────────────────────────────────────────────

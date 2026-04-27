@@ -53,6 +53,7 @@ interface AppState {
   // Auth
   lmApiKey: string | null
   lmProxyUrl: string | null
+  avApiKey: string | null
   // Config
   profile: UserProfile
   accounts: Account[]
@@ -64,12 +65,21 @@ interface AppState {
   taxConfig: TaxConfig
   medicalCoverages: MedicalCoverage[]
   medicalExpenses: MedicalExpense[]
+  // Dividend history from Alpha Vantage (persisted)
+  dividendHistory: Record<string, import('../lib/alphavantage').TickerDividend[]>
+  dividendSyncedAt: string | null
+  setTickerDividends: (ticker: string, dividends: import('../lib/alphavantage').TickerDividend[]) => void
+  setDividendSyncedAt: (at: string) => void
+  // Display preferences
+  minTransactionEUR: number
+  setMinTransactionEUR: (val: number) => void
   // Runtime (not persisted)
   simulationResult: SimulationResult | null
   simulationRunning: boolean
   // Actions
   setLmApiKey: (key: string | null) => void
   setLmProxyUrl: (url: string | null) => void
+  setAvApiKey: (key: string | null) => void
   setProfile: (patch: Partial<UserProfile>) => void
   setAccounts: (accounts: Account[]) => void
   upsertAccount: (account: Account) => void
@@ -105,6 +115,9 @@ export const useAppStore = create<AppState>()(
       // Initial state
       lmApiKey: null,
       lmProxyUrl: null,
+      avApiKey: null,
+      dividendHistory: {},
+      dividendSyncedAt: null,
       profile: defaultProfile,
       accounts: [],
       pensions: [],
@@ -115,12 +128,17 @@ export const useAppStore = create<AppState>()(
       taxConfig: defaultTaxConfig,
       medicalCoverages: [],
       medicalExpenses: [],
+      minTransactionEUR: 100,
       simulationResult: null,
       simulationRunning: false,
 
       // Actions
       setLmApiKey: (key) => set({ lmApiKey: key }),
       setLmProxyUrl: (url) => set({ lmProxyUrl: url }),
+      setAvApiKey: (key) => set({ avApiKey: key }),
+      setTickerDividends: (ticker, dividends) =>
+        set((s) => ({ dividendHistory: { ...s.dividendHistory, [ticker]: dividends } })),
+      setDividendSyncedAt: (at) => set({ dividendSyncedAt: at }),
       setProfile: (patch) =>
         set((s) => ({ profile: { ...s.profile, ...patch } })),
 
@@ -222,6 +240,7 @@ export const useAppStore = create<AppState>()(
       deleteMedicalExpense: (id) =>
         set((s) => ({ medicalExpenses: s.medicalExpenses.filter((e) => e.id !== id) })),
 
+      setMinTransactionEUR: (minTransactionEUR) => set({ minTransactionEUR }),
       setSimulationResult: (simulationResult) => set({ simulationResult }),
       setSimulationRunning: (simulationRunning) => set({ simulationRunning }),
     }),
@@ -245,6 +264,10 @@ export const useAppStore = create<AppState>()(
         },
         medicalCoverages: s.medicalCoverages,
         medicalExpenses: s.medicalExpenses,
+        minTransactionEUR: s.minTransactionEUR,
+        avApiKey: s.avApiKey,
+        dividendHistory: s.dividendHistory,
+        dividendSyncedAt: s.dividendSyncedAt,
       }),
     }
   )
