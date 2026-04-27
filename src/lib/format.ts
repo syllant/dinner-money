@@ -4,16 +4,16 @@ import type { Currency } from '../types'
 // (e.g. 1,000 for en-US, 1 000 for fr-FR)
 const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
 
-export function formatCurrency(amount: number, currency: Currency | string): string {
+export function formatCurrency(amount: number, currency: Currency | string, fractions = 0): string {
   const c = currency.toUpperCase()
   try {
     return new Intl.NumberFormat(locale, {
       style: 'currency',
       currency: c,
-      maximumFractionDigits: 0,
+      minimumFractionDigits: fractions,
+      maximumFractionDigits: fractions,
     }).format(amount)
   } catch {
-    // Fallback for unknown currency codes
     return `${amount.toLocaleString(locale)} ${c}`
   }
 }
