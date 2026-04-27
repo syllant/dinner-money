@@ -21,30 +21,64 @@ type ExtDividend = ProjectedDividend & {
 type MonthGroup = { month: string; totalEUR: number; items: ExtDividend[]; isPast: boolean }
 type TreemapView = 'holdings' | 'allocation' | 'currency'
 
-// ─── Constants ─────────────────────────────────────────────────────────────────
+// ─── Category helpers ───────────────────────────────────────────────────────────
+
+const FOREIGN_EQUITY_TICKERS = new Set([
+  'VXUS', 'VEA', 'VWO', 'EFA', 'EEM', 'IEFA', 'IXUS', 'ACWX', 'SCZ',
+  'SCHF', 'SCHI', 'FNDF', 'FNDX', 'GWL', 'DFAX', 'AVDE', 'AVEM',
+])
+const FOREIGN_BOND_TICKERS = new Set(['BNDX', 'IAGG', 'BWX', 'EMB', 'PICB', 'IGBH'])
+
+function isForeignEquity(ticker: string | null, name: string): boolean {
+  if (ticker && FOREIGN_EQUITY_TICKERS.has(ticker)) return true
+  const n = name.toLowerCase()
+  return (
+    n.includes('international') || n.includes('foreign') || n.includes('emerging') ||
+    n.includes('europe') || n.includes('pacific') || n.includes('asia') ||
+    n.includes('ex-u.s') || n.includes('ex us') || n.includes('world ex') ||
+    (n.includes('global') && !n.includes('u.s.') && !n.includes('domestic'))
+  )
+}
+
+// Returns true for US Treasury Bills / Notes / Bonds that have no exchange ticker
+function isTreasuryBill(ticker: string | null, securityType: string, name: string): boolean {
+  if (ticker !== null) return false
+  const t = (securityType ?? '').toLowerCase()
+  const n = name.toLowerCase()
+  return t === 'us treasury' || n.includes('treasury') || n.includes('t-bill')
+}
+
+function empowerCategory(securityType: string, ticker: string | null, name: string): string {
+  if (ticker?.startsWith('CUR:')) return 'Cash'
+  const t = (securityType ?? '').toLowerCase()
+  const n = (name ?? '').toLowerCase()
+  if (isTreasuryBill(ticker, securityType, name)) return 'US Bonds'
+  if (t === 'fixed income') {
+    if (ticker && FOREIGN_BOND_TICKERS.has(ticker)) return 'Foreign Bonds'
+    if (n.includes('international') || n.includes('emerging') || n.includes('foreign')) return 'Foreign Bonds'
+    return 'US Bonds'
+  }
+  if (['equity', 'etf', 'mutual fund'].includes(t)) {
+    return isForeignEquity(ticker, name) ? 'Foreign Stocks' : 'US Stocks'
+  }
+  if (['cash', 'money market'].includes(t)) return 'Cash'
+  return 'Other'
+}
 
 const ALLOC_COLORS: Record<string, string> = {
-  Stocks: '#22c55e',
-  Bonds: '#378ADD',
-  Cash: '#94a3b8',
-  'Real Estate': '#f59e0b',
-  Other: '#6b7280',
+  'US Stocks':      '#22c55e',
+  'Foreign Stocks': '#86efac',
+  'US Bonds':       '#378ADD',
+  'Foreign Bonds':  '#93c5fd',
+  'Cash':           '#94a3b8',
+  'Real Estate':    '#f59e0b',
+  'Other':          '#6b7280',
 }
 
 const CURRENCY_PALETTE = ['#378ADD', '#22c55e', '#f59e0b', '#a78bfa', '#34d399', '#94a3b8']
 function currencyColor(cur: string, idx: number): string {
   const explicit: Record<string, string> = { USD: '#378ADD', EUR: '#22c55e', GBP: '#f59e0b' }
   return explicit[cur] ?? CURRENCY_PALETTE[idx % CURRENCY_PALETTE.length]
-}
-
-function empowerCategory(securityType: string, ticker: string | null): string {
-  if (ticker?.startsWith('CUR:')) return 'Cash'
-  switch (securityType.toLowerCase()) {
-    case 'equity': case 'etf': case 'mutual fund': return 'Stocks'
-    case 'fixed income': return 'Bonds'
-    case 'cash': case 'money market': return 'Cash'
-    default: return 'Other'
-  }
 }
 
 // ─── Small UI helpers ──────────────────────────────────────────────────────────
@@ -62,10 +96,8 @@ function InfoTooltip({ text }: { text: string }) {
 
 function ViewToggle({ showTable, onToggle }: { showTable: boolean; onToggle: () => void }) {
   return (
-    <button
-      onClick={onToggle}
-      className="text-[10px] px-2 py-[3px] rounded border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-    >
+    <button onClick={onToggle}
+      className="text-[10px] px-2 py-[3px] rounded border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
       {showTable ? '⬡ Chart' : '⊞ Table'}
     </button>
   )
@@ -113,9 +145,7 @@ function MonthTooltip({ group }: { group: MonthGroup }) {
           <div className="text-gray-400 text-[10px] uppercase tracking-wide mb-[3px]">{name}</div>
           {items.map((d, i) => (
             <div key={i} className="flex justify-between gap-3 text-[10.5px]">
-              <span className="text-gray-300">
-                {d.ticker} · {d.sharesHeld.toFixed(2)} sh @ {formatCurrency(d.amount, d.currency, 2)}
-              </span>
+              <span className="text-gray-300">{d.ticker} · {d.sharesHeld.toFixed(2)} sh @ {formatCurrency(d.amount, d.currency, 2)}</span>
               <span className="text-green-400 shrink-0">+{formatCurrency(d.totalAmount, d.currency, 2)}</span>
             </div>
           ))}
@@ -146,9 +176,14 @@ export default function Investments() {
   const [showHoldingsTable, setShowHoldingsTable] = useState(false)
   const [hoveredHolding, setHoveredHolding] = useState<{
     ticker: string; fullName: string; value: number; gains: number | null
+    positions?: Array<{ label: string; value: number }>
   } | null>(null)
   const [treemapPos, setTreemapPos] = useState({ x: 0, y: 0 })
   const [divTooltip, setDivTooltip] = useState<{ group: MonthGroup; x: number; y: number } | null>(null)
+
+  // ── Filter excluded accounts ──
+
+  const includedAccounts = accounts.filter(a => a.includedInPlanning !== false)
 
   // ── Date range ──
 
@@ -164,16 +199,16 @@ export default function Investments() {
   })()
   const rangeLabel = dateRange === 'year' ? String(thisYear) : 'next 12m'
 
-  // ── Core totals ──
+  // ── Core totals (included accounts only) ──
 
-  const invested = accounts
+  const invested = includedAccounts
     .filter(a => a.type === 'investment' || a.type === 'retirement')
     .reduce((s, a) => s + convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
 
-  const totalBase = accounts
+  const totalBase = includedAccounts
     .reduce((s, a) => s + convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
 
-  // ── Holdings + gains (all investment/retirement accounts) ──
+  // ── Holdings + gains — with T-Bill consolidation ──
 
   let totalUnrealizedGains = 0
   let totalCostBasis = 0
@@ -186,7 +221,7 @@ export default function Investments() {
 
   let totalEq = 0, totalBd = 0, totalCash = 0
 
-  for (const a of accounts) {
+  for (const a of includedAccounts) {
     const b = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
     totalEq += b * a.allocation.equity / 100
     totalBd += b * a.allocation.bonds / 100
@@ -214,21 +249,26 @@ export default function Investments() {
           }
         }
 
-        const existing = h.ticker !== null ? allHoldings.find(x => x.ticker === h.ticker) : null
+        // Consolidate T-Bills under a single synthetic ticker
+        const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
+        const holdingTicker = tBill ? 'T-Bills' : (h.ticker ?? '')
+        const holdingName = tBill ? 'US Treasury Bills' : h.name
+
+        const existing = holdingTicker ? allHoldings.find(x => x.ticker === holdingTicker) : null
         if (existing) {
           existing.value += valBase
           existing.quantity += h.quantity
           if (gainBase !== null) existing.gains = (existing.gains ?? 0) + gainBase
           if (isShortTerm !== null) existing.isShortTerm = isShortTerm
         } else {
-          allHoldings.push({ ticker: h.ticker ?? '', name: h.name, value: valBase, gains: gainBase, isShortTerm, quantity: h.quantity, isPseudo: false })
+          allHoldings.push({ ticker: holdingTicker, name: holdingName, value: valBase, gains: gainBase, isShortTerm, quantity: h.quantity, isPseudo: false })
         }
       }
     }
   }
 
   // Add investment/retirement accounts without Plaid holdings as synthetic entries
-  for (const a of accounts.filter(a => a.type === 'investment' || a.type === 'retirement')) {
+  for (const a of includedAccounts.filter(a => a.type === 'investment' || a.type === 'retirement')) {
     if (!a.holdings || a.holdings.length === 0) {
       const val = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
       if (val !== 0) {
@@ -242,7 +282,7 @@ export default function Investments() {
   // ── Currency exposure ──
 
   const byCurrency: Record<string, number> = {}
-  for (const a of accounts) {
+  for (const a of includedAccounts) {
     const baseVal = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
     if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
       const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
@@ -259,57 +299,66 @@ export default function Investments() {
     }
   }
 
-  // ── Allocation by Empower category ──
+  // ── Allocation by Empower category + per-category position list ──
 
   const allocationByCategory: Record<string, number> = {}
-  for (const a of accounts) {
+  const allocationPositions: Record<string, Array<{ label: string; value: number }>> = {}
+
+  function addToCategory(cat: string, val: number, label: string) {
+    allocationByCategory[cat] = (allocationByCategory[cat] ?? 0) + val
+    if (!allocationPositions[cat]) allocationPositions[cat] = []
+    const existing = allocationPositions[cat].find(p => p.label === label)
+    if (existing) existing.value += val
+    else allocationPositions[cat].push({ label, value: val })
+  }
+
+  for (const a of includedAccounts) {
     if (a.type === 'loan' || a.type === 'credit') continue
     const b = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
     if (a.holdings && a.holdings.length > 0) {
       for (const h of a.holdings) {
-        const cat = empowerCategory(h.securityType, h.ticker)
-        allocationByCategory[cat] = (allocationByCategory[cat] ?? 0) + convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
+        const cat = empowerCategory(h.securityType, h.ticker, h.name)
+        const val = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        addToCategory(cat, val, tBill ? 'T-Bills' : (h.ticker || h.name.slice(0, 20)))
       }
     } else if (a.type === 'real_estate') {
-      allocationByCategory['Real Estate'] = (allocationByCategory['Real Estate'] ?? 0) + b
+      addToCategory('Real Estate', b, a.name)
     } else {
-      if (a.allocation.equity > 0) allocationByCategory['Stocks'] = (allocationByCategory['Stocks'] ?? 0) + b * a.allocation.equity / 100
-      if (a.allocation.bonds > 0) allocationByCategory['Bonds'] = (allocationByCategory['Bonds'] ?? 0) + b * a.allocation.bonds / 100
-      if (a.allocation.cash > 0) allocationByCategory['Cash'] = (allocationByCategory['Cash'] ?? 0) + b * a.allocation.cash / 100
+      if (a.allocation.equity > 0) addToCategory('US Stocks', b * a.allocation.equity / 100, `${a.name} (equity)`)
+      if (a.allocation.bonds > 0) addToCategory('US Bonds', b * a.allocation.bonds / 100, `${a.name} (bonds)`)
+      if (a.allocation.cash > 0) addToCategory('Cash', b * a.allocation.cash / 100, `${a.name} (cash)`)
     }
   }
 
-  // ── Dividends — past (actual from AV history) + future (projected) ──
+  // ── Dividends (past actual + future projected, included accounts only) ──
 
-  const projectedAnnualDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE)
+  const projectedAnnualDiv = projectedAnnualDividendsEUR(includedAccounts, DEFAULT_EUR_USD_RATE)
 
+  // T-Bills have no dividend ticker; exclude synthetic tickers from AV sync list
+  const SYNTHETIC_TICKERS = new Set(['T-Bills'])
   const investableTickers = [...new Set(
-    accounts.flatMap(a => a.holdings ?? [])
-      .map(h => h.ticker)
-      .filter((t): t is string => t !== null && !/^CUR:/.test(t))
+    includedAccounts.flatMap(a => a.holdings ?? [])
+      .filter(h => h.ticker !== null && !isTreasuryBill(h.ticker, h.securityType, h.name))
+      .map(h => h.ticker as string)
+      .filter(t => !/^CUR:/.test(t) && !SYNTHETIC_TICKERS.has(t))
   )]
   const tickersWithHistory = investableTickers.filter(t => (dividendHistory[t]?.length ?? 0) > 0)
 
-  const pastDividends: ExtDividend[] = accounts
+  const pastDividends: ExtDividend[] = includedAccounts
     .flatMap(a => (a.holdings ?? [])
       .filter(h => h.ticker && !/^CUR:/.test(h.ticker) && (dividendHistory[h.ticker!]?.length ?? 0) > 0)
       .flatMap(h => (dividendHistory[h.ticker!] ?? [])
         .filter(d => d.paymentDate >= rangeStart && d.paymentDate < todayStr)
         .map(d => ({
-          ticker: h.ticker!,
-          paymentDate: d.paymentDate,
-          amount: d.amount,
-          sharesHeld: h.quantity,
-          totalAmount: d.amount * h.quantity,
-          currency: h.currency,
-          accountId: a.id,
-          accountName: a.name,
-          isActual: true,
+          ticker: h.ticker!, paymentDate: d.paymentDate, amount: d.amount,
+          sharesHeld: h.quantity, totalAmount: d.amount * h.quantity,
+          currency: h.currency, accountId: a.id, accountName: a.name, isActual: true,
         }))
       )
     )
 
-  const futureDividends: ExtDividend[] = accounts
+  const futureDividends: ExtDividend[] = includedAccounts
     .flatMap(a => (a.holdings ?? [])
       .filter(h => h.ticker && !/^CUR:/.test(h.ticker) && (dividendHistory[h.ticker!]?.length ?? 0) > 0)
       .flatMap(h => projectDividends(h.ticker!, dividendHistory[h.ticker!], h.quantity, 20)
@@ -325,10 +374,7 @@ export default function Investments() {
   for (const d of allRangeDividends) {
     const m = d.paymentDate.slice(0, 7)
     let g = monthGroups.find(x => x.month === m)
-    if (!g) {
-      g = { month: m, totalEUR: 0, items: [], isPast: m < thisMonthStr }
-      monthGroups.push(g)
-    }
+    if (!g) { g = { month: m, totalEUR: 0, items: [], isPast: m < thisMonthStr }; monthGroups.push(g) }
     g.totalEUR += convertToBase(d.totalAmount, d.currency, 'EUR', DEFAULT_EUR_USD_RATE)
     g.items.push(d)
   }
@@ -356,7 +402,7 @@ export default function Investments() {
       return s + convertToBase(annual, e.currency, 'EUR', DEFAULT_EUR_USD_RATE)
     }, 0)
 
-  const safeWithdrawal4pct = invested * 0.04  // 4% rule; invested already in base currency (EUR)
+  const safeWithdrawal4pct = invested * 0.04
   const dividendCoveragePct = annualExpenses > 0 ? rangedDivTotal / annualExpenses * 100 : 0
 
   // ── AV sync ──
@@ -365,7 +411,6 @@ export default function Investments() {
     if (!avApiKey || investableTickers.length === 0) return
     setDivSyncing(true); setDivSyncMsg(null); setSyncedCount(0)
     let fetched = 0, failed = 0, rateLimited = false
-
     for (let i = 0; i < investableTickers.length; i++) {
       const ticker = investableTickers[i]
       try {
@@ -381,7 +426,6 @@ export default function Investments() {
       }
       if (i < investableTickers.length - 1) await new Promise(r => setTimeout(r, 13000))
     }
-
     setDividendSyncedAt(new Date().toISOString())
     setDivSyncMsg(rateLimited
       ? `Rate limit hit — ${fetched} fetched, ${failed} failed.`
@@ -389,7 +433,7 @@ export default function Investments() {
     setDivSyncing(false)
   }
 
-  // ── Treemap data (per view) ──
+  // ── Treemap data ──
 
   const holdingsTreemapData = allHoldings.slice(0, 30).map(h => ({
     name: h.isPseudo ? `(${h.name.slice(0, 9)})` : (h.ticker || '?'),
@@ -398,6 +442,7 @@ export default function Investments() {
     gain: h.gains,
     isPseudo: h.isPseudo,
     categoryColor: h.isPseudo ? '#6b7280' : undefined as string | undefined,
+    positions: undefined as Array<{ label: string; value: number }> | undefined,
   }))
 
   const allocTreemapData = Object.entries(allocationByCategory)
@@ -406,6 +451,7 @@ export default function Investments() {
     .map(([cat, val]) => ({
       name: cat, fullName: cat, size: val, gain: null, isPseudo: false,
       categoryColor: ALLOC_COLORS[cat] ?? '#6b7280',
+      positions: (allocationPositions[cat] ?? []).sort((a, b) => b.value - a.value).slice(0, 12),
     }))
 
   const currencyTreemapData = Object.entries(byCurrency)
@@ -414,6 +460,7 @@ export default function Investments() {
     .map(([cur, val], i) => ({
       name: cur, fullName: cur, size: val, gain: null, isPseudo: false,
       categoryColor: currencyColor(cur, i),
+      positions: undefined as Array<{ label: string; value: number }> | undefined,
     }))
 
   const activeTreemapData =
@@ -425,27 +472,26 @@ export default function Investments() {
     ? new Date(dividendSyncedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     : null
 
-  // ── Treemap cell renderer ──
+  // ── Treemap cell renderer (animation disabled for instant layout) ──
 
   const treemapContent = useCallback((props: any) => {
-    const { x, y, width, height, name, fullName, gain, size, categoryColor } = props
-    // Recharts calls content for internal/root nodes too — skip those
+    const { x, y, width, height, name, fullName, gain, size, categoryColor, positions } = props
+    // Recharts calls content for internal/root nodes — skip those
     if (size == null || width == null || width <= 0) return null
     const hasGain = gain != null
     const positive = (gain ?? 0) >= 0
     const fill = categoryColor ?? (hasGain ? (positive ? '#16a34a' : '#dc2626') : '#3b82f6')
 
-    // Compute how many text lines we can fit
     const lineH = 11
     const showValue = width > 36 && height > 28
     const showGain = width > 36 && height > 50 && hasGain
-    const lines = showGain ? 3 : showValue ? 2 : width > 28 && height > 16 ? 1 : 0
+    const lines = showGain ? 3 : showValue ? 2 : (width > 28 && height > 16) ? 1 : 0
     const startY = y + height / 2 - ((lines - 1) * lineH) / 2
 
     return (
       <g
         onMouseEnter={e => {
-          setHoveredHolding({ ticker: name, fullName: fullName ?? name, value: size, gains: gain ?? null })
+          setHoveredHolding({ ticker: name, fullName: fullName ?? name, value: size, gains: gain ?? null, positions })
           setTreemapPos({ x: e.clientX, y: e.clientY })
         }}
         onMouseMove={e => setTreemapPos({ x: e.clientX, y: e.clientY })}
@@ -456,15 +502,11 @@ export default function Investments() {
           stroke="white" strokeWidth={1.5} rx={2} />
         {lines >= 1 && (
           <text x={x + width / 2} y={startY} textAnchor="middle" dominantBaseline="middle"
-            fill="white" fontSize={Math.min(11, Math.max(8, width / 6))} fontWeight={600}>
-            {name}
-          </text>
+            fill="white" fontSize={Math.min(11, Math.max(8, width / 6))} fontWeight={600}>{name}</text>
         )}
         {lines >= 2 && (
           <text x={x + width / 2} y={startY + lineH} textAnchor="middle" dominantBaseline="middle"
-            fill="white" fillOpacity={0.85} fontSize={8.5}>
-            {formatCompact(size, profile.baseCurrency)}
-          </text>
+            fill="white" fillOpacity={0.85} fontSize={8.5}>{formatCompact(size, profile.baseCurrency)}</text>
         )}
         {lines >= 3 && hasGain && (
           <text x={x + width / 2} y={startY + 2 * lineH} textAnchor="middle" dominantBaseline="middle"
@@ -476,9 +518,7 @@ export default function Investments() {
     )
   }, [profile.baseCurrency])
 
-  // ── Portfolio accounts ──
-
-  const portfolioAccounts = accounts.filter(a => a.type === 'investment' || a.type === 'retirement')
+  const portfolioAccounts = includedAccounts.filter(a => a.type === 'investment' || a.type === 'retirement')
 
   return (
     <div onMouseLeave={() => setDivTooltip(null)}>
@@ -490,8 +530,7 @@ export default function Investments() {
                 dateRange === r
                   ? 'bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900'
                   : 'text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
-              }`}
-            >
+              }`}>
               {r === 'year' ? thisYear : 'Next 12m'}
             </button>
           ))}
@@ -540,9 +579,7 @@ export default function Investments() {
 
         {/* ── Holdings treemap + accounts ── */}
         <div className="grid grid-cols-[2fr_1fr] gap-3">
-
           <Card>
-            {/* Treemap view toggle */}
             <div className="flex justify-between items-center mb-2">
               <div className="flex items-center gap-1">
                 {(['holdings', 'allocation', 'currency'] as TreemapView[]).map(v => (
@@ -551,9 +588,10 @@ export default function Investments() {
                       treemapView === v
                         ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
                         : 'border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-                    }`}
-                  >
-                    {v === 'holdings' ? `Holdings${allHoldings.length > 0 ? ` (${allHoldings.length})` : ''}` : v === 'allocation' ? 'Allocation' : 'Currency'}
+                    }`}>
+                    {v === 'holdings'
+                      ? `Holdings${allHoldings.length > 0 ? ` (${allHoldings.length})` : ''}`
+                      : v === 'allocation' ? 'Allocation' : 'Currency'}
                   </button>
                 ))}
               </div>
@@ -562,7 +600,6 @@ export default function Investments() {
               )}
             </div>
 
-            {/* Holdings table view */}
             {treemapView === 'holdings' && showHoldingsTable ? (
               <div className="space-y-px max-h-[240px] overflow-y-auto">
                 {allHoldings.slice(0, 30).map((h, i) => (
@@ -585,7 +622,6 @@ export default function Investments() {
                 ))}
               </div>
             ) : (
-              /* Treemap (all views) */
               <div className="h-[240px]">
                 {activeTreemapData.length === 0 ? (
                   <div className="h-full flex items-center justify-center text-[11.5px] text-gray-400">
@@ -595,7 +631,12 @@ export default function Investments() {
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <Treemap data={activeTreemapData} dataKey="size" content={treemapContent} />
+                    <Treemap
+                      data={activeTreemapData}
+                      dataKey="size"
+                      content={treemapContent}
+                      isAnimationActive={false}
+                    />
                   </ResponsiveContainer>
                 )}
                 {treemapView === 'holdings' && (
@@ -635,12 +676,8 @@ export default function Investments() {
                         <div className="truncate text-gray-800 dark:text-gray-200">{a.name}</div>
                         <div className="flex items-center gap-1.5 mt-[2px]">
                           <span className="text-[10px] text-gray-400 capitalize">{a.type}</span>
-                          {a.plaidAccessToken && (
-                            <Badge variant="success">Plaid</Badge>
-                          )}
-                          {!a.plaidAccessToken && a.isManual && (
-                            <Badge variant="neutral">Manual</Badge>
-                          )}
+                          {a.plaidAccessToken && <Badge variant="success">Plaid</Badge>}
+                          {!a.plaidAccessToken && a.isManual && <Badge variant="neutral">Manual</Badge>}
                           {a.holdings && a.holdings.length > 0 && (
                             <span className="text-[10px] text-gray-400">{a.holdings.length} holdings</span>
                           )}
@@ -660,30 +697,21 @@ export default function Investments() {
           <Card>
             <CardTitle>Portfolio risk</CardTitle>
             <div className="space-y-3 mt-2">
-              <RiskBar
-                label="USD exposure"
-                value={usdExposurePct}
-                max={100}
+              <RiskBar label="USD exposure" value={usdExposurePct} max={100}
                 color={usdExposurePct > 75 ? '#f59e0b' : '#3b82f6'}
                 note={usdExposurePct > 70 ? '— high FX risk' : undefined}
-                tooltip="Share of total portfolio held in USD. High USD exposure creates EUR/USD currency risk — a weaker dollar directly reduces your real purchasing power when spending in euros."
-              />
+                tooltip="Share of total portfolio held in USD. High USD exposure creates EUR/USD currency risk — a weaker dollar reduces your real purchasing power when spending in euros." />
               <RiskBar
                 label={`Top holding (${allHoldings[0]?.ticker || allHoldings[0]?.name || '—'})`}
-                value={topHoldingPct}
-                max={100}
+                value={topHoldingPct} max={100}
                 color={topHoldingPct > 20 ? '#f59e0b' : '#22c55e'}
                 note={topHoldingPct > 25 ? '— concentrated' : undefined}
-                tooltip="Largest single position as a share of total invested assets. High concentration increases sensitivity to one stock or fund's performance."
-              />
+                tooltip="Largest single position as a share of total invested assets. High concentration increases sensitivity to one stock or fund's performance." />
               {totalCostBasis > 0 && (
-                <RiskBar
-                  label="Unrealized gain ratio"
+                <RiskBar label="Unrealized gain ratio"
                   value={totalBase > 0 ? totalUnrealizedGains / totalCostBasis * 100 : 0}
-                  max={100}
-                  color="#22c55e"
-                  tooltip="Total unrealized gains relative to cost basis. A high ratio means large latent capital gains tax exposure — if you need to sell, you will trigger a significant tax event (FR PFU 30% for residents)."
-                />
+                  max={100} color="#22c55e"
+                  tooltip="Total unrealized gains relative to cost basis. A high ratio means large latent capital gains tax exposure — if you need to sell, you will trigger a significant tax event (FR PFU 30% for residents)." />
               )}
             </div>
             <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 space-y-[5px] text-[11px] text-gray-500 dark:text-gray-400">
@@ -709,24 +737,15 @@ export default function Investments() {
             <CardTitle>Income sustainability</CardTitle>
             <div className="space-y-3 mt-2">
               {annualExpenses > 0 && (
-                <RiskBar
-                  label="Dividend coverage"
-                  value={dividendCoveragePct}
-                  max={100}
+                <RiskBar label="Dividend coverage" value={dividendCoveragePct} max={100}
                   color={dividendCoveragePct >= 80 ? '#22c55e' : dividendCoveragePct >= 40 ? '#f59e0b' : '#ef4444'}
                   note={`${dividendCoveragePct.toFixed(0)}%`}
-                  tooltip={`Projected dividend income (${rangeLabel}) as a share of your active expenses for the same period. 100% means dividends alone cover spending without drawing down principal.`}
-                />
+                  tooltip={`Projected dividend income (${rangeLabel}) as a share of your active expenses for the same period. 100% means dividends alone cover spending without drawing down principal.`} />
               )}
               {dividendYield > 0 && (
-                <RiskBar
-                  label="Portfolio dividend yield"
-                  value={dividendYield}
-                  max={6}
-                  color="#22c55e"
-                  precision={2}
-                  tooltip={`Annual dividend income as a percentage of total invested assets. A yield of 2–4% is typical for a diversified equity portfolio. Shown for ${rangeLabel}.`}
-                />
+                <RiskBar label="Portfolio dividend yield" value={dividendYield} max={6}
+                  color="#22c55e" precision={2}
+                  tooltip={`Annual dividend income as a percentage of total invested assets. A yield of 2–4% is typical for a diversified equity portfolio. Shown for ${rangeLabel}.`} />
               )}
             </div>
             <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 space-y-[5px] text-[11px]">
@@ -743,7 +762,7 @@ export default function Investments() {
               <div className="flex justify-between text-gray-500 dark:text-gray-400">
                 <span className="flex items-center">
                   4% rule (invested)
-                  <InfoTooltip text="The 4% safe withdrawal rate from the Bengen/Trinity study: withdraw 4% of your invested portfolio per year and historically you have ~95% probability of not depleting it over 30 years. This is the annual spend your portfolio can theoretically sustain." />
+                  <InfoTooltip text="The 4% safe withdrawal rate (Bengen/Trinity study): withdraw 4% of your invested portfolio per year and historically you have ~95% probability of not depleting it over 30 years." />
                 </span>
                 <span className="font-medium">{formatCurrency(safeWithdrawal4pct, 'EUR')}/yr</span>
               </div>
@@ -754,32 +773,24 @@ export default function Investments() {
         {/* ── Dividend schedule ── */}
         <Card>
           <CardTitle>Dividend schedule — {rangeLabel}</CardTitle>
-
-          {divSyncMsg && !divSyncing && (
-            <div className="text-[11px] text-gray-500 mb-3">{divSyncMsg}</div>
-          )}
-
+          {divSyncMsg && !divSyncing && <div className="text-[11px] text-gray-500 mb-3">{divSyncMsg}</div>}
           {investableTickers.length === 0 && (
             <div className="text-[11.5px] text-gray-400">
               No Plaid-linked investment holdings. Link accounts in{' '}
               <a href="#/config/accounts" className="text-blue-600 underline">Accounts</a>.
             </div>
           )}
-
           {investableTickers.length > 0 && tickersWithHistory.length === 0 && (
             <div className="text-[11.5px] text-gray-400">
               {investableTickers.length} tickers found — use Sync above to fetch dividend history.
             </div>
           )}
-
-          {/* Monthly grouped rows */}
           {monthGroups.length > 0 && (
             <div className="space-y-px">
               {monthGroups.map(g => {
                 const maxTotal = Math.max(...monthGroups.map(x => x.totalEUR))
                 return (
-                  <div
-                    key={g.month}
+                  <div key={g.month}
                     className={`relative flex items-center gap-3 py-[5px] px-2 border-b border-gray-100 dark:border-gray-700 last:border-0 text-[12px] rounded hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-default transition-opacity ${g.isPast ? 'opacity-40 hover:opacity-70' : ''}`}
                     onMouseEnter={e => {
                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -807,15 +818,13 @@ export default function Investments() {
               </div>
             </div>
           )}
-
-          {/* No data diagnostic */}
           {tickersWithHistory.length > 0 && monthGroups.length === 0 && (
             <>
               <div className="text-[11.5px] text-gray-400 mb-3">
                 History synced for {tickersWithHistory.length} ticker{tickersWithHistory.length !== 1 ? 's' : ''} but no payments in {rangeLabel}.
               </div>
               {(() => {
-                const flat = accounts.flatMap(a => a.holdings ?? [])
+                const flat = includedAccounts.flatMap(a => a.holdings ?? [])
                 return (
                   <div className="border border-amber-200 dark:border-amber-800 rounded-[5px] overflow-hidden">
                     <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 text-[10.5px] font-medium text-amber-700 dark:text-amber-400">Per-ticker diagnosis</div>
@@ -856,16 +865,26 @@ export default function Investments() {
       {hoveredHolding && (
         <div
           style={{ position: 'fixed', left: treemapPos.x + 14, top: treemapPos.y - 10, zIndex: 50, pointerEvents: 'none' }}
-          className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl max-w-[200px]"
+          className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl max-w-[220px]"
         >
           <div className="font-semibold">{hoveredHolding.ticker !== hoveredHolding.fullName ? hoveredHolding.ticker : hoveredHolding.fullName}</div>
           {hoveredHolding.ticker !== hoveredHolding.fullName && (
-            <div className="text-gray-400 text-[10px] truncate">{hoveredHolding.fullName}</div>
+            <div className="text-gray-400 text-[10px]">{hoveredHolding.fullName}</div>
           )}
           <div className="mt-1 font-medium">{formatCurrency(hoveredHolding.value, profile.baseCurrency)}</div>
           {hoveredHolding.gains != null && (
             <div className={hoveredHolding.gains >= 0 ? 'text-green-400' : 'text-red-400'}>
               {hoveredHolding.gains >= 0 ? '+' : ''}{formatCurrency(hoveredHolding.gains, profile.baseCurrency)}
+            </div>
+          )}
+          {hoveredHolding.positions && hoveredHolding.positions.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-gray-700 space-y-[3px]">
+              {hoveredHolding.positions.map((p, i) => (
+                <div key={i} className="flex justify-between gap-3 text-[10px]">
+                  <span className="text-gray-300 truncate">{p.label}</span>
+                  <span className="text-gray-400 shrink-0">{formatCompact(p.value, profile.baseCurrency)}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
