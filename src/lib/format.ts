@@ -23,6 +23,7 @@ export function formatPct(value: number, decimals = 1): string {
 }
 
 export function formatCompact(amount: number, currency: Currency | string): string {
+  if (amount == null || !isFinite(amount)) return '—'
   const c = currency.toUpperCase()
   const symbol = c === 'EUR' ? '€' : c === 'USD' ? '$' : c
   if (Math.abs(amount) >= 1_000_000) return `${symbol}${(amount / 1_000_000).toFixed(1)}M`

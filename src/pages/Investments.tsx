@@ -429,6 +429,8 @@ export default function Investments() {
 
   const treemapContent = useCallback((props: any) => {
     const { x, y, width, height, name, fullName, gain, size, categoryColor } = props
+    // Recharts calls content for internal/root nodes too — skip those
+    if (size == null || width == null || width <= 0) return null
     const hasGain = gain != null
     const positive = (gain ?? 0) >= 0
     const fill = categoryColor ?? (hasGain ? (positive ? '#16a34a' : '#dc2626') : '#3b82f6')
