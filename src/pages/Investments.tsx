@@ -206,6 +206,7 @@ export default function Investments() {
     .reduce((s, a) => s + convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
 
   const totalBase = includedAccounts
+    .filter(a => a.type !== 'real_estate')
     .reduce((s, a) => s + convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
 
   // ── Holdings + gains — with T-Bill consolidation ──
@@ -282,7 +283,7 @@ export default function Investments() {
   // ── Currency exposure ──
 
   const byCurrency: Record<string, number> = {}
-  for (const a of includedAccounts) {
+  for (const a of includedAccounts.filter(a => a.type !== 'real_estate')) {
     const baseVal = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
     if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
       const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
@@ -313,7 +314,7 @@ export default function Investments() {
   }
 
   for (const a of includedAccounts) {
-    if (a.type === 'loan' || a.type === 'credit') continue
+    if (a.type === 'loan' || a.type === 'credit' || a.type === 'real_estate') continue
     const b = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
     if (a.holdings && a.holdings.length > 0) {
       for (const h of a.holdings) {
@@ -560,7 +561,7 @@ export default function Investments() {
           <MetricCard label="Total invested" value={formatCompact(invested, profile.baseCurrency)}
             sub="excl. cash & real estate" />
           <MetricCard
-            label={`Dividends (${rangeLabel})`}
+            label="Dividends"
             value={formatCompact(rangedDivTotal, 'EUR')}
             sub={tickersWithHistory.length > 0 ? `${tickersWithHistory.length}/${investableTickers.length} tickers via AV` : 'yield-based estimate'}
             valueClass="text-green-600"
@@ -750,12 +751,12 @@ export default function Investments() {
             </div>
             <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 space-y-[5px] text-[11px]">
               <div className="flex justify-between text-gray-500 dark:text-gray-400">
-                <span>Dividends ({rangeLabel})</span>
+                <span>Dividends</span>
                 <span className="text-green-600 font-medium">+{formatCurrency(rangedDivTotal, 'EUR')}</span>
               </div>
               {annualExpenses > 0 && (
                 <div className="flex justify-between text-gray-500 dark:text-gray-400">
-                  <span>Expenses ({rangeLabel})</span>
+                  <span>Expenses</span>
                   <span className="text-red-500 font-medium">{formatCurrency(annualExpenses, 'EUR')}</span>
                 </div>
               )}
@@ -772,7 +773,7 @@ export default function Investments() {
 
         {/* ── Dividend schedule ── */}
         <Card>
-          <CardTitle>Dividend schedule — {rangeLabel}</CardTitle>
+          <CardTitle>Dividend schedule</CardTitle>
           {divSyncMsg && !divSyncing && <div className="text-[11px] text-gray-500 mb-3">{divSyncMsg}</div>}
           {investableTickers.length === 0 && (
             <div className="text-[11.5px] text-gray-400">
@@ -813,7 +814,7 @@ export default function Investments() {
                 )
               })}
               <div className="flex justify-end pt-2 text-[11.5px]">
-                <span className="text-gray-500 mr-2">Total ({rangeLabel})</span>
+                <span className="text-gray-500 mr-2">Total</span>
                 <span className="font-medium text-green-600">+{formatCurrency(rangedDivTotal, 'EUR')}</span>
               </div>
             </div>
@@ -821,7 +822,7 @@ export default function Investments() {
           {tickersWithHistory.length > 0 && monthGroups.length === 0 && (
             <>
               <div className="text-[11.5px] text-gray-400 mb-3">
-                History synced for {tickersWithHistory.length} ticker{tickersWithHistory.length !== 1 ? 's' : ''} but no payments in {rangeLabel}.
+                History synced for {tickersWithHistory.length} ticker{tickersWithHistory.length !== 1 ? 's' : ''} but no payments in this period.
               </div>
               {(() => {
                 const flat = includedAccounts.flatMap(a => a.holdings ?? [])
