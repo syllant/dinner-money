@@ -5,7 +5,7 @@ import { Badge } from '../components/ui/Badge'
 import { FlowRow, recurrenceNote, monthLabel } from '../components/ui/FlowRow'
 import { formatCurrency } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE } from '../lib/currency'
-import { projectedAnnualDividendsEUR, DIVIDEND_MONTHS } from '../lib/dividends'
+import { projectedAnnualDividendsEUR } from '../lib/dividends'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,12 +125,14 @@ function buildItems(
     }
   }
 
-  // ── Projected quarterly dividend income (Q1=Mar, Q2=Jun, Q3=Sep, Q4=Dec) ──
+  // ── Projected monthly dividend income (current year onwards) ─────────────
   if (year >= currentYear) {
-    const quarterlyDiv = projectedAnnualDividendsEUR(accounts ?? [], DEFAULT_EUR_USD_RATE) / 4
-    if (quarterlyDiv > 0) {
+    const monthlyDiv = projectedAnnualDividendsEUR(
+      (accounts ?? []).filter(a => a.includedInPlanning !== false),
+      DEFAULT_EUR_USD_RATE
+    ) / 12
+    if (monthlyDiv > 0) {
       for (let m = 1; m <= 12; m++) {
-        if (!DIVIDEND_MONTHS.has(m)) continue
         const ym = `${year}-${String(m).padStart(2, '0')}`
         if (ym < currentYM) continue
         items.push({
@@ -138,13 +140,13 @@ function buildItems(
           date: ym,
           monthLabel: monthLabel(ym),
           description: 'Dividends (est.)',
-          note: 'quarterly projection',
+          note: 'monthly projection',
           category: 'Dividends',
-          amount: quarterlyDiv,
+          amount: monthlyDiv,
           currency: 'EUR',
-          amountEUR: quarterlyDiv,
+          amountEUR: monthlyDiv,
           kind: 'income',
-          recurring: false,
+          recurring: true,
           isPast: false,
         })
       }

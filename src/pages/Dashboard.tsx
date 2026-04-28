@@ -8,7 +8,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { FlowRow, monthLabel as flowMonthLabel, recurrenceNote } from '../components/ui/FlowRow'
 import { formatCompact, formatCurrency } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
-import { projectedAnnualDividendsEUR, DIVIDEND_MONTHS } from '../lib/dividends'
+import { projectedAnnualDividendsEUR } from '../lib/dividends'
 import {
   ComposedChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
   BarChart, Bar, Cell, ReferenceArea,
@@ -183,7 +183,7 @@ function LifetimeChart({ result, initialNW, expenses, medicalCoverages, medicalE
   const events = useLifeEvents()
   const allExp = allExpensesOf(expenses, medicalCoverages, medicalExpenses)
   const currentYear = new Date().getFullYear()
-  const annualProjectedDiv = Math.round(projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE))
+  const annualProjectedDiv = Math.round(projectedAnnualDividendsEUR(accounts.filter(a => a.includedInPlanning !== false), DEFAULT_EUR_USD_RATE))
 
   const eventsByYear = events.reduce<Record<number, LifeEvent[]>>((acc, ev) => {
     if (!acc[ev.year]) acc[ev.year] = []
@@ -216,7 +216,7 @@ function LifetimeChart({ result, initialNW, expenses, medicalCoverages, medicalE
       for (const w of windfalls) {
         if (parseInt(w.date.split('-')[0]) === y) incomeItems.push({ label: w.name, amount: w.amount, currency: w.currency })
       }
-      if (y > currentYear && annualProjectedDiv > 0) {
+      if (y >= currentYear && annualProjectedDiv > 0) {
         incomeItems.push({ label: 'Dividends (est.)', amount: annualProjectedDiv, currency: 'EUR' })
       }
       for (const acc of accounts) {
@@ -328,7 +328,7 @@ function buildMonthlyData(
   const cy = today.getFullYear()
   const cm = today.getMonth() + 1
   const currentYM = `${cy}-${String(cm).padStart(2, '0')}`
-  const quarterlyProjectedDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE) / 4
+  const monthlyProjectedDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE) / 12
 
   for (let offset = -pastMonths; offset <= futureMonths; offset++) {
     const totalM = cm + offset
@@ -361,9 +361,9 @@ function buildMonthlyData(
       }
     }
 
-    // Projected quarterly dividends for future months (Q1=Mar, Q2=Jun, Q3=Sep, Q4=Dec)
-    if (ym >= currentYM && DIVIDEND_MONTHS.has(month) && quarterlyProjectedDiv > 0) {
-      incomeItems.push({ label: 'Dividends (est.)', amount: quarterlyProjectedDiv, currency: 'EUR', amountEUR: quarterlyProjectedDiv })
+    // Projected monthly dividends for current + future months
+    if (ym >= currentYM && monthlyProjectedDiv > 0) {
+      incomeItems.push({ label: 'Dividends (est.)', amount: monthlyProjectedDiv, currency: 'EUR', amountEUR: monthlyProjectedDiv })
     }
 
     // Include windfall income in the month of the windfall (treat YYYY or YYYY-MM)
@@ -546,7 +546,7 @@ function buildUpcomingIncome(
   const cy = today.getFullYear()
   const cm = today.getMonth() + 1
 
-  const quarterlyProjectedDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE) / 4
+  const monthlyProjectedDiv = projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE) / 12
 
   for (let i = 0; i < futureMonths; i++) {
     const totalM = cm + i
@@ -558,8 +558,8 @@ function buildUpcomingIncome(
       if (personBY + p.startAge > year) continue
       items.push({ key: `pension-${p.id}-${ym}`, date: ym, label: p.label, note: 'monthly pension', amount: p.monthlyAmount, currency: p.currency, recurring: true })
     }
-    if (DIVIDEND_MONTHS.has(month) && quarterlyProjectedDiv > 0) {
-      items.push({ key: `div-proj-${ym}`, date: ym, label: 'Dividends (est.)', note: 'quarterly projection', amount: quarterlyProjectedDiv, currency: 'EUR', recurring: true })
+    if (monthlyProjectedDiv > 0) {
+      items.push({ key: `div-proj-${ym}`, date: ym, label: 'Dividends (est.)', note: 'monthly projection', amount: monthlyProjectedDiv, currency: 'EUR', recurring: true })
     }
   }
 
@@ -683,8 +683,8 @@ export default function Dashboard() {
   const result = simulationResult
   const today = new Date()
   const upcomingExpenses = buildUpcomingExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [], today, 6, 30)
-  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, accounts, profile, today, 6, 30)
-  const monthlyData = buildMonthlyData(expenses, medicalCoverages ?? [], medicalExpenses ?? [], pensions, windfalls, accounts, profile, today, 6, 6)
+  const upcomingIncome = buildUpcomingIncome(pensions, windfalls, includedAccounts, profile, today, 6, 30)
+  const monthlyData = buildMonthlyData(expenses, medicalCoverages ?? [], medicalExpenses ?? [], pensions, windfalls, includedAccounts, profile, today, 6, 6)
 
   return (
     <div>
@@ -747,7 +747,7 @@ export default function Dashboard() {
               medicalExpenses={medicalExpenses ?? []}
               pensions={pensions}
               windfalls={windfalls}
-              accounts={accounts}
+              accounts={includedAccounts}
               profile={profile}
             />
           ) : (

@@ -49,6 +49,7 @@ function isTreasuryBill(ticker: string | null, securityType: string, name: strin
 }
 
 function empowerCategory(securityType: string, ticker: string | null, name: string): string {
+  if (ticker === 'CUR:EUR') return 'EUR Cash'
   if (ticker?.startsWith('CUR:')) return 'Cash'
   const t = (securityType ?? '').toLowerCase()
   const n = (name ?? '').toLowerCase()
@@ -71,6 +72,7 @@ const ALLOC_COLORS: Record<string, string> = {
   'US Bonds':       '#378ADD',
   'Foreign Bonds':  '#93c5fd',
   'Cash':           '#94a3b8',
+  'EUR Cash':       '#4ade80',
   'Real Estate':    '#f59e0b',
   'Other':          '#6b7280',
 }
@@ -176,6 +178,7 @@ export default function Investments() {
   const [showHoldingsTable, setShowHoldingsTable] = useState(false)
   const [hoveredHolding, setHoveredHolding] = useState<{
     ticker: string; fullName: string; value: number; gains: number | null
+    nativeCurrency: string; nativeValue: number; nativeGains: number | null
     positions?: Array<{ label: string; value: number }>
   } | null>(null)
   const [treemapPos, setTreemapPos] = useState({ x: 0, y: 0 })
@@ -218,6 +221,7 @@ export default function Investments() {
   const allHoldings: Array<{
     ticker: string; name: string; value: number; gains: number | null
     isShortTerm: boolean | null; quantity: number; isPseudo: boolean
+    nativeCurrency: string; nativeValue: number; nativeGains: number | null
   }> = []
 
   let totalEq = 0, totalBd = 0, totalCash = 0
@@ -255,14 +259,20 @@ export default function Investments() {
         const holdingTicker = tBill ? 'T-Bills' : (h.ticker ?? '')
         const holdingName = tBill ? 'US Treasury Bills' : h.name
 
+        const nativeGain = (h.costBasis != null && h.costBasis > 0) ? h.institutionValue - h.costBasis : null
         const existing = holdingTicker ? allHoldings.find(x => x.ticker === holdingTicker) : null
         if (existing) {
           existing.value += valBase
+          existing.nativeValue += h.institutionValue
           existing.quantity += h.quantity
           if (gainBase !== null) existing.gains = (existing.gains ?? 0) + gainBase
+          if (nativeGain !== null) existing.nativeGains = (existing.nativeGains ?? 0) + nativeGain
           if (isShortTerm !== null) existing.isShortTerm = isShortTerm
         } else {
-          allHoldings.push({ ticker: holdingTicker, name: holdingName, value: valBase, gains: gainBase, isShortTerm, quantity: h.quantity, isPseudo: false })
+          allHoldings.push({
+            ticker: holdingTicker, name: holdingName, value: valBase, gains: gainBase, isShortTerm, quantity: h.quantity, isPseudo: false,
+            nativeCurrency: h.currency.toUpperCase(), nativeValue: h.institutionValue, nativeGains: nativeGain,
+          })
         }
       }
     }
@@ -273,7 +283,7 @@ export default function Investments() {
     if (!a.holdings || a.holdings.length === 0) {
       const val = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
       if (val !== 0) {
-        allHoldings.push({ ticker: '', name: a.name, value: val, gains: null, isShortTerm: null, quantity: 0, isPseudo: true })
+        allHoldings.push({ ticker: '', name: a.name, value: val, gains: null, isShortTerm: null, quantity: 0, isPseudo: true, nativeCurrency: a.currency.toUpperCase(), nativeValue: Math.abs(a.balance), nativeGains: null })
       }
     }
   }
@@ -321,10 +331,18 @@ export default function Investments() {
         const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
         const cat = empowerCategory(h.securityType, h.ticker, h.name)
         const val = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-        addToCategory(cat, val, tBill ? 'T-Bills' : (h.ticker || h.name.slice(0, 20)))
+        const posLabel = h.ticker === 'CUR:EUR' ? 'EUR Cash' : tBill ? 'T-Bills' : (h.ticker || h.name.slice(0, 20))
+        addToCategory(cat, val, posLabel)
       }
-    } else if (a.type === 'real_estate') {
-      addToCategory('Real Estate', b, a.name)
+    } else if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
+      // Separate the EUR-denominated portion before applying allocation to the remainder
+      const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+      addToCategory('EUR Cash', eurBase, `${a.name} (EUR)`)
+      const eurInAccCurrency = a.fxSplitEUR * DEFAULT_EUR_USD_RATE // EUR → USD
+      const remainB = convertToBase(Math.max(0, a.balance - eurInAccCurrency), a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+      if (a.allocation.equity > 0) addToCategory('US Stocks', remainB * a.allocation.equity / 100, `${a.name} (equity)`)
+      if (a.allocation.bonds > 0) addToCategory('US Bonds', remainB * a.allocation.bonds / 100, `${a.name} (bonds)`)
+      if (a.allocation.cash > 0) addToCategory('Cash', remainB * a.allocation.cash / 100, `${a.name} (cash)`)
     } else {
       if (a.allocation.equity > 0) addToCategory('US Stocks', b * a.allocation.equity / 100, `${a.name} (equity)`)
       if (a.allocation.bonds > 0) addToCategory('US Bonds', b * a.allocation.bonds / 100, `${a.name} (bonds)`)
@@ -354,7 +372,7 @@ export default function Investments() {
         .map(d => ({
           ticker: h.ticker!, paymentDate: d.paymentDate, amount: d.amount,
           sharesHeld: h.quantity, totalAmount: d.amount * h.quantity,
-          currency: h.currency, accountId: a.id, accountName: a.name, isActual: true,
+          currency: h.currency, accountId: String(a.id), accountName: a.name, isActual: true,
         }))
       )
     )
@@ -364,7 +382,7 @@ export default function Investments() {
       .filter(h => h.ticker && !/^CUR:/.test(h.ticker) && (dividendHistory[h.ticker!]?.length ?? 0) > 0)
       .flatMap(h => projectDividends(h.ticker!, dividendHistory[h.ticker!], h.quantity, 20)
         .filter(d => d.paymentDate >= todayStr && d.paymentDate <= rangeEnd)
-        .map(d => ({ ...d, currency: h.currency, accountId: a.id, accountName: a.name, isActual: false }))
+        .map(d => ({ ...d, currency: h.currency, accountId: String(a.id), accountName: a.name, isActual: false }))
       )
     )
 
@@ -444,6 +462,9 @@ export default function Investments() {
     isPseudo: h.isPseudo,
     categoryColor: h.isPseudo ? '#6b7280' : undefined as string | undefined,
     positions: undefined as Array<{ label: string; value: number }> | undefined,
+    nativeCurrency: h.nativeCurrency,
+    nativeValue: h.nativeValue,
+    nativeGains: h.nativeGains,
   }))
 
   const allocTreemapData = Object.entries(allocationByCategory)
@@ -453,6 +474,7 @@ export default function Investments() {
       name: cat, fullName: cat, size: val, gain: null, isPseudo: false,
       categoryColor: ALLOC_COLORS[cat] ?? '#6b7280',
       positions: (allocationPositions[cat] ?? []).sort((a, b) => b.value - a.value).slice(0, 12),
+      nativeCurrency: profile.baseCurrency, nativeValue: val, nativeGains: null,
     }))
 
   const currencyTreemapData = Object.entries(byCurrency)
@@ -462,6 +484,7 @@ export default function Investments() {
       name: cur, fullName: cur, size: val, gain: null, isPseudo: false,
       categoryColor: currencyColor(cur, i),
       positions: undefined as Array<{ label: string; value: number }> | undefined,
+      nativeCurrency: cur, nativeValue: val, nativeGains: null,
     }))
 
   const activeTreemapData =
@@ -476,7 +499,7 @@ export default function Investments() {
   // ── Treemap cell renderer (animation disabled for instant layout) ──
 
   const treemapContent = useCallback((props: any) => {
-    const { x, y, width, height, name, fullName, gain, size, categoryColor, positions } = props
+    const { x, y, width, height, name, fullName, gain, size, categoryColor, positions, nativeCurrency, nativeValue, nativeGains } = props
     // Recharts calls content for internal/root nodes — skip those
     if (size == null || width == null || width <= 0) return null
     const hasGain = gain != null
@@ -492,7 +515,11 @@ export default function Investments() {
     return (
       <g
         onMouseEnter={e => {
-          setHoveredHolding({ ticker: name, fullName: fullName ?? name, value: size, gains: gain ?? null, positions })
+          setHoveredHolding({ ticker: name, fullName: fullName ?? name, value: size, gains: gain ?? null, positions,
+            nativeCurrency: nativeCurrency ?? profile.baseCurrency,
+            nativeValue: nativeValue ?? size,
+            nativeGains: nativeGains ?? null,
+          })
           setTreemapPos({ x: e.clientX, y: e.clientY })
         }}
         onMouseMove={e => setTreemapPos({ x: e.clientX, y: e.clientY })}
@@ -612,10 +639,10 @@ export default function Investments() {
                       <div className="text-[10px] text-gray-400 truncate">{h.name}</div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="font-medium">{formatCompact(h.value, profile.baseCurrency)}</div>
-                      <div className={`text-[10px] ${h.gains != null && h.gains >= 0 ? 'text-green-500' : h.gains ? 'text-red-500' : 'text-gray-400'}`}>
-                        {h.gains != null
-                          ? `${h.gains >= 0 ? '+' : ''}${formatCompact(h.gains, profile.baseCurrency)}${h.isShortTerm ? ' ST' : ''}`
+                      <div className="font-medium">{formatCurrency(h.nativeValue, h.nativeCurrency)}</div>
+                      <div className={`text-[10px] ${h.nativeGains != null && h.nativeGains >= 0 ? 'text-green-500' : h.nativeGains ? 'text-red-500' : 'text-gray-400'}`}>
+                        {h.nativeGains != null
+                          ? `${h.nativeGains >= 0 ? '+' : ''}${formatCurrency(Math.abs(h.nativeGains), h.nativeCurrency)}${h.isShortTerm ? ' ST' : ''}`
                           : h.isPseudo ? 'no Plaid sync' : 'no cost basis'}
                       </div>
                     </div>
@@ -669,25 +696,27 @@ export default function Investments() {
               <div className="text-[11px] text-gray-400">No investment or retirement accounts.</div>
             ) : (
               <div className="space-y-px">
-                {portfolioAccounts.map(a => {
-                  const bal = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-                  return (
-                    <div key={a.id} className="flex items-start justify-between py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0 text-[11px]">
-                      <div className="min-w-0 flex-1 pr-2">
-                        <div className="truncate text-gray-800 dark:text-gray-200">{a.name}</div>
-                        <div className="flex items-center gap-1.5 mt-[2px]">
-                          <span className="text-[10px] text-gray-400 capitalize">{a.type}</span>
-                          {a.plaidAccessToken && <Badge variant="success">Plaid</Badge>}
-                          {!a.plaidAccessToken && a.isManual && <Badge variant="neutral">Manual</Badge>}
-                          {a.holdings && a.holdings.length > 0 && (
-                            <span className="text-[10px] text-gray-400">{a.holdings.length} holdings</span>
-                          )}
-                        </div>
+                {portfolioAccounts.map(a => (
+                  <div key={a.id} className="flex items-start justify-between py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0 text-[11px]">
+                    <div className="min-w-0 flex-1 pr-2">
+                      <div className="truncate text-gray-800 dark:text-gray-200">{a.name}</div>
+                      <div className="flex items-center gap-1.5 mt-[2px]">
+                        <span className="text-[10px] text-gray-400 capitalize">{a.type}</span>
+                        {a.plaidAccessToken && <Badge variant="success">Plaid</Badge>}
+                        {!a.plaidAccessToken && a.isManual && <Badge variant="neutral">Manual</Badge>}
+                        {a.holdings && a.holdings.length > 0 && (
+                          <span className="text-[10px] text-gray-400">{a.holdings.length} holdings</span>
+                        )}
                       </div>
-                      <div className="shrink-0 font-medium">{formatCompact(bal, profile.baseCurrency)}</div>
                     </div>
-                  )
-                })}
+                    <div className="shrink-0 text-right">
+                      <div className="font-medium">{formatCurrency(a.balance, a.currency)}</div>
+                      {a.currency.toUpperCase() !== profile.baseCurrency && (
+                        <div className="text-[10px] text-gray-400">{formatCompact(convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), profile.baseCurrency)}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </Card>
@@ -806,10 +835,25 @@ export default function Investments() {
                           style={{ width: `${Math.min(100, g.totalEUR / maxTotal * 100)}%` }} />
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-[10px] text-gray-400">{g.items.length} payment{g.items.length !== 1 ? 's' : ''}</span>
-                      <span className="text-green-600 font-medium w-[56px] text-right">+{formatCurrency(g.totalEUR, 'EUR')}</span>
-                    </div>
+                    {(() => {
+                      const byCur = g.items.reduce<Record<string, number>>((acc, d) => {
+                        const c = d.currency.toUpperCase()
+                        acc[c] = (acc[c] ?? 0) + d.totalAmount
+                        return acc
+                      }, {})
+                      const currencies = Object.entries(byCur)
+                      return (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] text-gray-400">{g.items.length} payment{g.items.length !== 1 ? 's' : ''}</span>
+                          {currencies.map(([cur, amt]) => (
+                            <span key={cur} className="text-green-600 font-medium text-right">+{formatCurrency(amt, cur)}</span>
+                          ))}
+                          {currencies.length > 1 && (
+                            <span className="text-green-700 font-medium text-[10px] text-right">=&nbsp;{formatCurrency(g.totalEUR, 'EUR')}</span>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )
               })}
@@ -872,10 +916,10 @@ export default function Investments() {
           {hoveredHolding.ticker !== hoveredHolding.fullName && (
             <div className="text-gray-400 text-[10px]">{hoveredHolding.fullName}</div>
           )}
-          <div className="mt-1 font-medium">{formatCurrency(hoveredHolding.value, profile.baseCurrency)}</div>
-          {hoveredHolding.gains != null && (
-            <div className={hoveredHolding.gains >= 0 ? 'text-green-400' : 'text-red-400'}>
-              {hoveredHolding.gains >= 0 ? '+' : ''}{formatCurrency(hoveredHolding.gains, profile.baseCurrency)}
+          <div className="mt-1 font-medium">{formatCurrency(hoveredHolding.nativeValue, hoveredHolding.nativeCurrency)}</div>
+          {hoveredHolding.nativeGains != null && (
+            <div className={hoveredHolding.nativeGains >= 0 ? 'text-green-400' : 'text-red-400'}>
+              {hoveredHolding.nativeGains >= 0 ? '+' : ''}{formatCurrency(Math.abs(hoveredHolding.nativeGains), hoveredHolding.nativeCurrency)}
             </div>
           )}
           {hoveredHolding.positions && hoveredHolding.positions.length > 0 && (
