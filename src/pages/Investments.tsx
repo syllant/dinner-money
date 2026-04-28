@@ -49,8 +49,8 @@ function isTreasuryBill(ticker: string | null, securityType: string, name: strin
 }
 
 function empowerCategory(securityType: string, ticker: string | null, name: string): string {
-  if (ticker === 'CUR:EUR') return 'EUR Cash'
-  if (ticker?.startsWith('CUR:')) return 'Cash'
+  if (ticker === 'CUR:EUR') return 'EUR'
+  if (ticker?.startsWith('CUR:')) return 'USD'
   const t = (securityType ?? '').toLowerCase()
   const n = (name ?? '').toLowerCase()
   if (isTreasuryBill(ticker, securityType, name)) return 'US Bonds'
@@ -62,17 +62,18 @@ function empowerCategory(securityType: string, ticker: string | null, name: stri
   if (['equity', 'etf', 'mutual fund'].includes(t)) {
     return isForeignEquity(ticker, name) ? 'Foreign Stocks' : 'US Stocks'
   }
-  if (['cash', 'money market'].includes(t)) return 'Cash'
+  if (['cash', 'money market'].includes(t)) return 'USD'
   return 'Other'
 }
 
+const CASH_COLOR = '#94a3b8'
 const ALLOC_COLORS: Record<string, string> = {
   'US Stocks':      '#22c55e',
-  'Foreign Stocks': '#86efac',
+  'Foreign Stocks': '#f97316',
   'US Bonds':       '#378ADD',
   'Foreign Bonds':  '#93c5fd',
-  'Cash':           '#94a3b8',
-  'EUR Cash':       '#4ade80',
+  'USD':            CASH_COLOR,
+  'EUR':            CASH_COLOR,
   'Real Estate':    '#f59e0b',
   'Other':          '#6b7280',
 }
@@ -254,6 +255,23 @@ export default function Investments() {
           }
         }
 
+        // fxSplitEUR: IBKR reports EUR cash as CUR:USD — split into CUR:EUR + CUR:USD
+        if (h.ticker === 'CUR:USD' && a.fxSplitEUR && a.fxSplitEUR > 0) {
+          const eurInUSD = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
+          const remainUSD = Math.max(0, h.institutionValue - eurInUSD)
+          const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const existEUR = allHoldings.find(x => x.ticker === 'CUR:EUR')
+          if (existEUR) { existEUR.value += eurBase; existEUR.nativeValue += a.fxSplitEUR }
+          else allHoldings.push({ ticker: 'CUR:EUR', name: 'EUR Cash', value: eurBase, gains: null, isShortTerm: null, quantity: 0, isPseudo: false, nativeCurrency: 'EUR', nativeValue: a.fxSplitEUR, nativeGains: null })
+          if (remainUSD > 0) {
+            const remBase = convertToBase(remainUSD, 'USD', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+            const existUSD = allHoldings.find(x => x.ticker === 'CUR:USD')
+            if (existUSD) { existUSD.value += remBase; existUSD.nativeValue += remainUSD }
+            else allHoldings.push({ ticker: 'CUR:USD', name: 'USD Cash', value: remBase, gains: null, isShortTerm: null, quantity: 0, isPseudo: false, nativeCurrency: 'USD', nativeValue: remainUSD, nativeGains: null })
+          }
+          continue
+        }
+
         // Consolidate T-Bills under a single synthetic ticker
         const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
         const holdingTicker = tBill ? 'T-Bills' : (h.ticker ?? '')
@@ -330,14 +348,14 @@ export default function Investments() {
       for (const h of a.holdings) {
         const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
         const cat = empowerCategory(h.securityType, h.ticker, h.name)
-        const posLabel = h.ticker === 'CUR:EUR' ? 'EUR Cash' : tBill ? 'T-Bills' : (h.ticker || h.name.slice(0, 20))
+        const posLabel = tBill ? 'T-Bills' : (h.ticker || h.name.slice(0, 20))
         // fxSplitEUR override: IBKR reports EUR cash as CUR:USD — split it out
         if (h.ticker === 'CUR:USD' && a.fxSplitEUR && a.fxSplitEUR > 0) {
           const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-          addToCategory('EUR Cash', eurBase, `${a.name} (EUR)`)
+          addToCategory('EUR', eurBase, `${a.name} (EUR)`)
           const eurAsUSD = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
           const remainBase = convertToBase(Math.max(0, h.institutionValue - eurAsUSD), h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-          if (remainBase > 0) addToCategory('Cash', remainBase, posLabel)
+          if (remainBase > 0) addToCategory('USD', remainBase, posLabel)
         } else {
           const val = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
           addToCategory(cat, val, posLabel)
@@ -346,16 +364,16 @@ export default function Investments() {
     } else if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
       // Separate the EUR-denominated portion before applying allocation to the remainder
       const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-      addToCategory('EUR Cash', eurBase, `${a.name} (EUR)`)
+      addToCategory('EUR', eurBase, `${a.name} (EUR)`)
       const eurInAccCurrency = a.fxSplitEUR * DEFAULT_EUR_USD_RATE // EUR → USD
       const remainB = convertToBase(Math.max(0, a.balance - eurInAccCurrency), a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
       if (a.allocation.equity > 0) addToCategory('US Stocks', remainB * a.allocation.equity / 100, `${a.name} (equity)`)
       if (a.allocation.bonds > 0) addToCategory('US Bonds', remainB * a.allocation.bonds / 100, `${a.name} (bonds)`)
-      if (a.allocation.cash > 0) addToCategory('Cash', remainB * a.allocation.cash / 100, `${a.name} (cash)`)
+      if (a.allocation.cash > 0) addToCategory('USD', remainB * a.allocation.cash / 100, `${a.name} (cash)`)
     } else {
       if (a.allocation.equity > 0) addToCategory('US Stocks', b * a.allocation.equity / 100, `${a.name} (equity)`)
       if (a.allocation.bonds > 0) addToCategory('US Bonds', b * a.allocation.bonds / 100, `${a.name} (bonds)`)
-      if (a.allocation.cash > 0) addToCategory('Cash', b * a.allocation.cash / 100, `${a.name} (cash)`)
+      if (a.allocation.cash > 0) addToCategory('USD', b * a.allocation.cash / 100, `${a.name} (cash)`)
     }
   }
 
@@ -476,15 +494,21 @@ export default function Investments() {
     nativeGains: h.nativeGains,
   }))
 
+  const USD_ALLOC_CATS = new Set(['US Stocks', 'Foreign Stocks', 'US Bonds', 'Foreign Bonds', 'USD'])
   const allocTreemapData = Object.entries(allocationByCategory)
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
-    .map(([cat, val]) => ({
-      name: cat, fullName: cat, size: val, gain: null, isPseudo: false,
-      categoryColor: ALLOC_COLORS[cat] ?? '#6b7280',
-      positions: (allocationPositions[cat] ?? []).sort((a, b) => b.value - a.value).slice(0, 12),
-      nativeCurrency: profile.baseCurrency, nativeValue: val, nativeGains: null,
-    }))
+    .map(([cat, val]) => {
+      const showUSD = USD_ALLOC_CATS.has(cat) && profile.baseCurrency === 'EUR'
+      return {
+        name: cat, fullName: cat, size: val, gain: null, isPseudo: false,
+        categoryColor: ALLOC_COLORS[cat] ?? '#6b7280',
+        positions: (allocationPositions[cat] ?? []).sort((a, b) => b.value - a.value).slice(0, 12),
+        nativeCurrency: showUSD ? 'USD' : profile.baseCurrency,
+        nativeValue: showUSD ? val * DEFAULT_EUR_USD_RATE : val,
+        nativeGains: null,
+      }
+    })
 
   const currencyTreemapData = Object.entries(byCurrency)
     .filter(([, v]) => v > 0)
