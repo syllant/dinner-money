@@ -695,7 +695,7 @@ export default function Investments() {
                     <Treemap
                       data={activeTreemapData}
                       dataKey="size"
-                      content={treemapContent}
+                      content={treemapContent as any}
                       isAnimationActive={false}
                     />
                   </ResponsiveContainer>
