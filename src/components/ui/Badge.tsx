@@ -16,7 +16,7 @@ const variants: Record<BadgeVariant, string> = {
 
 export function Badge({ variant = 'neutral', children }: { variant?: BadgeVariant; children: React.ReactNode }) {
   return (
-    <span className={clsx('inline-flex items-center text-[10px] px-[7px] py-[2px] rounded-[3px] font-medium', variants[variant])}>
+    <span className={clsx('inline-flex w-fit items-center text-[10px] px-[7px] py-[2px] rounded-[3px] font-medium', variants[variant])}>
       {children}
     </span>
   )

@@ -1,27 +1,29 @@
 import { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
-import { Button } from '../../components/ui/Button'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
 import { Badge } from '../../components/ui/Badge'
 import { formatCurrency, generateId } from '../../lib/format'
 import type { PensionEstimate, PensionSource } from '../../types'
 
-const SOURCE_LABELS: Record<PensionSource, string> = {
+const SOURCE_LABELS: Record<string, string> = {
   US_SS: '🇺🇸 Social Security',
-  FR_CNAV: '🇫🇷 CNAV',
-  FR_AGIRC: '🇫🇷 AGIRC-ARRCO',
+  FR_RETRAITE: '🇫🇷 French pension',
+  FR_CNAV: '🇫🇷 French pension (CNAV)',   // legacy, kept for display of old records
+  FR_AGIRC: '🇫🇷 French pension (AGIRC)', // legacy
   OTHER: 'Other',
 }
 
-const defaultPension = (): PensionEstimate => ({
+const SOURCE_OPTIONS: PensionSource[] = ['US_SS', 'FR_RETRAITE', 'OTHER']
+
+const defaultPension = (source: PensionSource = 'US_SS'): PensionEstimate => ({
   id: generateId(),
-  source: 'US_SS',
-  label: 'Social Security',
+  source,
+  label: SOURCE_LABELS[source] ?? source,
   person: 'self',
   monthlyAmount: 0,
-  currency: 'USD',
-  startAge: 67,
+  currency: source === 'FR_RETRAITE' ? 'EUR' : 'USD',
+  startAge: source === 'FR_RETRAITE' ? 64 : 67,
 })
 
 export default function Pensions() {
@@ -34,11 +36,7 @@ export default function Pensions() {
 
   return (
     <div>
-      <PageHeader title="Pensions">
-        {editing ? (
-          <><Button onClick={() => setEditing(null)}>Cancel</Button><Button variant="success" onClick={save}>Save</Button></>
-        ) : null}
-      </PageHeader>
+      <PageHeader title="Pensions" />
       <div className="p-4 space-y-3">
         <p className="text-[11.5px] text-gray-500 dark:text-gray-400">
           Enter estimates from your official sources:{' '}
@@ -55,8 +53,8 @@ export default function Pensions() {
                 <label className="text-[11px] text-gray-500">Source</label>
                 <select className="h-[32px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
                   value={editing.source}
-                  onChange={e => setEditing({ ...editing, source: e.target.value as PensionSource, label: SOURCE_LABELS[e.target.value as PensionSource] })}>
-                  {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  onChange={e => setEditing({ ...editing, source: e.target.value as PensionSource, label: SOURCE_LABELS[e.target.value] ?? e.target.value })}>
+                  {SOURCE_OPTIONS.map(k => <option key={k} value={k}>{SOURCE_LABELS[k]}</option>)}
                 </select>
               </div>
               <div className="flex flex-col gap-1">
@@ -84,6 +82,10 @@ export default function Pensions() {
                   value={editing.startAge} onChange={e => setEditing({ ...editing, startAge: parseInt(e.target.value) })} />
               </div>
             </div>
+            <div className="flex gap-2 pt-1">
+              <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50 dark:hover:bg-gray-800" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="text-[11.5px] px-3 py-1 bg-green-50 border border-green-300 text-green-700 rounded-[5px] hover:bg-green-100" onClick={save}>Save</button>
+            </div>
           </div>
         )}
 
@@ -96,7 +98,7 @@ export default function Pensions() {
           {pensions.map(p => (
             <TableRow key={p.id}>
               <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr_80px] gap-2 items-center">
-                <span>{SOURCE_LABELS[p.source]}</span>
+                <span>{SOURCE_LABELS[p.source] ?? p.source}</span>
                 <span className="capitalize">{p.person}</span>
                 <span className="font-medium">{formatCurrency(p.monthlyAmount, p.currency)}</span>
                 <Badge variant={p.currency === 'EUR' ? 'eur' : 'usd'}>{p.currency}</Badge>
@@ -108,7 +110,7 @@ export default function Pensions() {
               </div>
             </TableRow>
           ))}
-          <TableAddRow onClick={() => setEditing(defaultPension())}>+ Add pension source</TableAddRow>
+          <TableAddRow onClick={() => setEditing(defaultPension('US_SS'))}>+ Add pension source</TableAddRow>
         </Table>
       </div>
     </div>

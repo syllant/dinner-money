@@ -33,6 +33,26 @@ export interface AssetAllocation {
 
 export type AccountType = 'investment' | 'retirement' | 'cash' | 'real_estate' | 'loan' | 'credit' | 'other'
 
+export interface PlaidHolding {
+  ticker: string | null
+  name: string
+  quantity: number
+  institutionPrice: number     // live price from broker
+  institutionValue: number     // total value
+  costBasis: number | null     // original cost, if provided
+  currency: string
+  securityType: string         // 'equity' | 'etf' | 'mutual fund' | 'fixed income' | 'cash' | etc.
+  purchaseDate?: string        // YYYY-MM-DD, most recent buy transaction date (from investment history)
+}
+
+export interface PlaidDividend {
+  securityName: string
+  ticker: string | null
+  amount: number
+  currency: string
+  date: string                 // YYYY-MM-DD
+}
+
 export interface Account {
   id: number             // LunchMoney account ID
   lmId: number
@@ -45,11 +65,23 @@ export interface Account {
   syncedAt: string       // ISO timestamp
   isManual: boolean
   includedInPlanning?: boolean    // false to exclude from net worth / simulation (default true)
+  interestRate?: number  // % APY, for cash/loan accounts
+  dueDate?: number       // day of month (1–31), for credit accounts
+
+  // Plaid Integration
+  plaidItemId?: string
+  plaidAccessToken?: string
+  holdings?: PlaidHolding[]
+  dividends?: PlaidDividend[]
+
+  // Multi-currency override (e.g. IBKR reports all cash as CUR:USD but holds EUR too)
+  fxSplitEUR?: number     // EUR amount held in this account (absolute, not a %)
+  fxSplitEURRef?: number  // reference balance (CUR:USD value or total balance) when fxSplitEUR was last set — used to detect stale values
 }
 
 // ─── Pensions ─────────────────────────────────────────────────────────────────
 
-export type PensionSource = 'US_SS' | 'FR_CNAV' | 'FR_AGIRC' | 'OTHER'
+export type PensionSource = 'US_SS' | 'FR_RETRAITE' | 'OTHER'
 
 export interface PensionEstimate {
   id: string

@@ -7,9 +7,10 @@ import { Banner } from '../../components/ui/Banner'
 import { fetchCurrentUser, LunchMoneyError } from '../../lib/lunchmoney'
 
 export default function Settings() {
-  const { lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, taxConfig, setTaxConfig, profile, setProfile } = useAppStore()
+  const { lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, taxConfig, setTaxConfig, profile, setProfile, minTransactionEUR, setMinTransactionEUR, avApiKey, setAvApiKey } = useAppStore()
   const [keyInput, setKeyInput] = useState(lmApiKey ?? '')
   const [proxyInput, setProxyInput] = useState(lmProxyUrl ?? '')
+  const [avKeyInput, setAvKeyInput] = useState(avApiKey ?? '')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [keySaved, setKeySaved] = useState(false)
@@ -64,6 +65,8 @@ export default function Settings() {
       windfalls: store.windfalls,
       monteCarloConfig: store.monteCarloConfig,
       taxConfig: store.taxConfig,
+      dividendHistory: store.dividendHistory,
+      avApiKey: store.avApiKey,
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -90,6 +93,12 @@ export default function Settings() {
         if (data.windfalls) store.setWindfalls(data.windfalls)
         if (data.monteCarloConfig) store.setMonteCarloConfig(data.monteCarloConfig)
         if (data.taxConfig) store.setTaxConfig(data.taxConfig)
+        if (data.avApiKey) store.setAvApiKey(data.avApiKey)
+        if (data.dividendHistory) {
+          Object.entries(data.dividendHistory as Record<string, any[]>).forEach(([ticker, divs]) =>
+            store.setTickerDividends(ticker, divs as any)
+          )
+        }
         alert('Config imported successfully')
       } catch {
         alert('Failed to import — invalid JSON')
@@ -204,6 +213,31 @@ export default function Settings() {
 
         <hr className="border-gray-200 dark:border-gray-700" />
 
+        {/* Alpha Vantage */}
+        <section>
+          <h2 className="text-[13px] font-medium mb-2">Alpha Vantage API key</h2>
+          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
+            Used to fetch per-ticker dividend history on the Investments page. Free tier: 25 requests/day.
+            Get a free key at{' '}
+            <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noreferrer" className="text-blue-600 underline">
+              alphavantage.co
+            </a>.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              className="flex-1 h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+              value={avKeyInput}
+              onChange={e => setAvKeyInput(e.target.value)}
+              placeholder="Enter Alpha Vantage API key"
+            />
+            <Button onClick={() => setAvApiKey(avKeyInput.trim() || null)} disabled={!avKeyInput.trim()}>Save</Button>
+          </div>
+          {avApiKey && <div className="mt-1 text-[11px] text-green-600">✓ Key saved</div>}
+        </section>
+
+        <hr className="border-gray-200 dark:border-gray-700" />
+
         {/* Display currency */}
         <section>
           <h2 className="text-[13px] font-medium mb-2">Display currency</h2>
@@ -218,6 +252,32 @@ export default function Settings() {
             <option value="EUR">EUR (€)</option>
             <option value="USD">USD ($)</option>
           </select>
+        </section>
+
+        <hr className="border-gray-200 dark:border-gray-700" />
+
+        {/* Income & Expense display */}
+        <section>
+          <h2 className="text-[13px] font-medium mb-1">Income & expense display</h2>
+          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
+            Hide line items below this amount in the Income & Expenses page. Useful to suppress low-value monthly interest or small dividends.
+          </p>
+          <div className="flex items-center gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-gray-500">Min. transaction (EUR)</label>
+              <input
+                type="number"
+                min="0"
+                step="10"
+                className="h-[32px] w-32 border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                value={minTransactionEUR}
+                onChange={e => setMinTransactionEUR(Math.max(0, parseFloat(e.target.value) || 0))}
+              />
+            </div>
+            <div className="text-[11px] text-gray-400 mt-4">
+              Items below this threshold are hidden in Income &amp; Expenses and the net totals.
+            </div>
+          </div>
         </section>
 
         <hr className="border-gray-200 dark:border-gray-700" />
