@@ -1,10 +1,9 @@
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AppShell } from './components/layout/AppShell'
 import { useAppStore } from './store/useAppStore'
-import Dashboard from './pages/Dashboard'
+import Overview from './pages/Overview'
 import Investments from './pages/Investments'
-import CashSavings from './pages/CashSavings'
-import IncomeExpenses from './pages/IncomeExpenses'
+import CashFlow from './pages/CashFlow'
 import Tax from './pages/Tax'
 import Profile from './pages/config/Profile'
 import Accounts from './pages/config/Accounts'
@@ -12,6 +11,7 @@ import Pensions from './pages/config/Pensions'
 import RealEstate from './pages/config/RealEstate'
 import Expenses from './pages/config/Expenses'
 import Windfalls from './pages/config/Windfalls'
+import Transfers from './pages/config/Transfers'
 import Settings from './pages/config/Settings'
 
 /** Redirects to /settings when no API key is configured yet */
@@ -30,10 +30,9 @@ export default function App() {
       <AppShell>
         <OnboardingGate>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Overview />} />
           <Route path="/investments" element={<Investments />} />
-          <Route path="/cash" element={<CashSavings />} />
-          <Route path="/income-expenses" element={<IncomeExpenses />} />
+          <Route path="/cash" element={<CashFlow />} />
           <Route path="/tax" element={<Tax />} />
           <Route path="/config/profile" element={<Profile />} />
           <Route path="/config/accounts" element={<Accounts />} />
@@ -42,6 +41,7 @@ export default function App() {
           <Route path="/config/income" element={<Windfalls />} />
           <Route path="/config/windfalls" element={<Windfalls />} />
           <Route path="/config/expenses" element={<Expenses />} />
+          <Route path="/config/transfers" element={<Transfers />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

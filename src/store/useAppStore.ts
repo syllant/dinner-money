@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import type {
   UserProfile, Account, PensionEstimate, RealEstateEvent,
   Expense, Windfall, MonteCarloConfig, TaxConfig, SimulationResult,
-  QuarterlyPayment, MedicalCoverage, MedicalExpense,
+  QuarterlyPayment, MedicalCoverage, MedicalExpense, Transfer,
 } from '../types'
 
 // ─── Default values ───────────────────────────────────────────────────────────
@@ -65,6 +65,7 @@ interface AppState {
   taxConfig: TaxConfig
   medicalCoverages: MedicalCoverage[]
   medicalExpenses: MedicalExpense[]
+  transfers: Transfer[]
   // Dividend history from Alpha Vantage (persisted)
   dividendHistory: Record<string, import('../lib/alphavantage').TickerDividend[]>
   dividendSyncedAt: string | null
@@ -103,6 +104,8 @@ interface AppState {
   deleteMedicalCoverage: (id: string) => void
   upsertMedicalExpense: (expense: MedicalExpense) => void
   deleteMedicalExpense: (id: string) => void
+  upsertTransfer: (transfer: Transfer) => void
+  deleteTransfer: (id: string) => void
   setSimulationResult: (result: SimulationResult | null) => void
   setSimulationRunning: (running: boolean) => void
 }
@@ -128,6 +131,7 @@ export const useAppStore = create<AppState>()(
       taxConfig: defaultTaxConfig,
       medicalCoverages: [],
       medicalExpenses: [],
+      transfers: [],
       minTransactionEUR: 100,
       simulationResult: null,
       simulationRunning: false,
@@ -240,6 +244,15 @@ export const useAppStore = create<AppState>()(
       deleteMedicalExpense: (id) =>
         set((s) => ({ medicalExpenses: s.medicalExpenses.filter((e) => e.id !== id) })),
 
+      upsertTransfer: (transfer) =>
+        set((s) => ({
+          transfers: s.transfers.some((t) => t.id === transfer.id)
+            ? s.transfers.map((t) => (t.id === transfer.id ? transfer : t))
+            : [...s.transfers, transfer],
+        })),
+      deleteTransfer: (id) =>
+        set((s) => ({ transfers: s.transfers.filter((t) => t.id !== id) })),
+
       setMinTransactionEUR: (minTransactionEUR) => set({ minTransactionEUR }),
       setSimulationResult: (simulationResult) => set({ simulationResult }),
       setSimulationRunning: (simulationRunning) => set({ simulationRunning }),
@@ -264,6 +277,7 @@ export const useAppStore = create<AppState>()(
         },
         medicalCoverages: s.medicalCoverages,
         medicalExpenses: s.medicalExpenses,
+        transfers: s.transfers,
         minTransactionEUR: s.minTransactionEUR,
         avApiKey: s.avApiKey,
         dividendHistory: s.dividendHistory,

@@ -91,6 +91,7 @@ export interface PensionEstimate {
   monthlyAmount: number
   currency: Currency
   startAge: number
+  targetAccountId?: number   // which account receives these deposits
 }
 
 // ─── Real estate ──────────────────────────────────────────────────────────────
@@ -106,21 +107,30 @@ export interface RealEstateEvent {
   isRecurring: boolean   // true for rent (monthly outflow)
   endDate: string | null // for rent periods
   notes: string
+  targetAccountId?: number  // sell: where proceeds land; buy: n/a
+  sourceAccountId?: number  // buy/rent: which account funds the payment
 }
 
 // ─── Expenses ─────────────────────────────────────────────────────────────────
 
-export type ExpenseFrequency = 'monthly' | 'yearly' | 'one_time'
+export type ExpenseFrequency = 'monthly' | 'yearly' | 'one_time' | 'custom'
+
+export interface ExpenseInstallment {
+  date: string    // YYYY-MM
+  amount: number
+}
 
 export interface Expense {
   id: string
   name: string
-  amount: number
+  amount: number          // total budget (reference); for custom, sum of installments
   frequency: ExpenseFrequency
   currency: Currency
-  startDate: string      // YYYY-MM
+  startDate: string      // YYYY-MM (first installment date for custom)
   endDate: string | null
   category: string
+  sourceAccountId?: number
+  installments?: ExpenseInstallment[]  // only for frequency === 'custom'
 }
 
 // ─── Windfalls ────────────────────────────────────────────────────────────────
@@ -130,11 +140,12 @@ export type TaxTreatment = 'CAPITAL_GAINS_LT' | 'CAPITAL_GAINS_ST' | 'ORDINARY_I
 export interface Windfall {
   id: string
   name: string
-  date: string           // YYYY
+  date: string           // YYYY or YYYY-MM
   amount: number
   currency: Currency
   taxTreatment: TaxTreatment
   notes: string
+  targetAccountId?: number  // which account receives the proceeds
 }
 
 // ─── Monte Carlo ──────────────────────────────────────────────────────────────
@@ -183,6 +194,8 @@ export interface MedicalCoverage {
   currency: Currency
   startDate: string      // YYYY-MM
   endDate: string | null
+  sourceAccountId?: number
+  installments?: ExpenseInstallment[]
 }
 
 export interface MedicalExpense {
@@ -194,6 +207,24 @@ export interface MedicalExpense {
   startDate: string      // YYYY-MM
   endDate: string | null
   category: string
+  sourceAccountId?: number
+  installments?: ExpenseInstallment[]
+}
+
+// ─── Transfers ────────────────────────────────────────────────────────────────
+
+export type TransferFrequency = 'once' | 'monthly' | 'yearly'
+
+export interface Transfer {
+  id: string
+  name: string
+  fromAccountId: number
+  toAccountId: number
+  amount: number
+  currency: Currency
+  frequency: TransferFrequency
+  startDate: string      // YYYY-MM
+  endDate?: string | null  // for recurring transfers
 }
 
 // ─── Simulation results (runtime, not persisted) ──────────────────────────────

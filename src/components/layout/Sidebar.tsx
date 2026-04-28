@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, TrendingUp, PiggyBank, ArrowLeftRight,
+  LayoutDashboard, TrendingUp, PiggyBank,
   FileText, User, CreditCard, Clock, Home, Receipt,
-  Banknote, Settings, RefreshCw,
+  Banknote, Settings, RefreshCw, ArrowLeftRight,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
@@ -19,8 +19,7 @@ interface NavItem {
 const insightItems: NavItem[] = [
   { to: '/', label: 'Overview', icon: <LayoutDashboard size={13} /> },
   { to: '/investments', label: 'Investments', icon: <TrendingUp size={13} /> },
-  { to: '/cash', label: 'Cash & savings', icon: <PiggyBank size={13} /> },
-  { to: '/income-expenses', label: 'Income & expenses', icon: <ArrowLeftRight size={13} /> },
+  { to: '/cash', label: 'Cash flow', icon: <PiggyBank size={13} /> },
   { to: '/tax', label: 'Tax', icon: <FileText size={13} /> },
 ]
 
@@ -31,6 +30,7 @@ const configItems: NavItem[] = [
   { to: '/config/real-estate', label: 'Real estate', icon: <Home size={13} /> },
   { to: '/config/income', label: 'Income', icon: <Banknote size={13} /> },
   { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
+  { to: '/config/transfers', label: 'Transfers', icon: <ArrowLeftRight size={13} /> },
 ]
 
 function SidebarNavItem({ item }: { item: NavItem }) {

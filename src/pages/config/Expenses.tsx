@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
+import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect'
 import { formatCurrency, generateId } from '../../lib/format'
 import { recurrenceNote, monthLabel } from '../../components/ui/FlowRow'
-import type { Expense, MedicalCoverage, MedicalExpense } from '../../types'
+import type { Expense, MedicalCoverage, MedicalExpense, ExpenseInstallment } from '../../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,11 +15,13 @@ interface UnifiedExpense {
   name: string
   amount: number
   currency: 'USD' | 'EUR'
-  frequency: 'monthly' | 'yearly' | 'one_time'
+  frequency: 'monthly' | 'yearly' | 'one_time' | 'custom'
   startDate: string
   endDate: string | null
   category: string
   source: ExpSource
+  sourceAccountId?: number
+  installments?: ExpenseInstallment[]
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -44,17 +47,20 @@ function flattenExpenses(
   const fromCoverage: UnifiedExpense[] = (medicalCoverages ?? []).map(c => ({
     id: c.id, name: c.name, amount: c.amount, currency: c.currency as 'USD' | 'EUR',
     frequency: c.frequency as UnifiedExpense['frequency'], startDate: c.startDate, endDate: c.endDate,
-    category: 'Medical coverage', source: 'coverage',
+    category: 'Medical coverage', source: 'coverage' as ExpSource,
+    sourceAccountId: c.sourceAccountId, installments: c.installments,
   }))
   const fromMedical: UnifiedExpense[] = (medicalExpenses ?? []).map(e => ({
     id: e.id, name: e.name, amount: e.amount, currency: e.currency as 'USD' | 'EUR',
     frequency: e.frequency as UnifiedExpense['frequency'], startDate: e.startDate, endDate: e.endDate,
-    category: e.category || 'Medical', source: 'medical',
+    category: e.category || 'Medical', source: 'medical' as ExpSource,
+    sourceAccountId: e.sourceAccountId, installments: e.installments,
   }))
   const fromExpenses: UnifiedExpense[] = expenses.map(e => ({
     id: e.id, name: e.name, amount: e.amount, currency: e.currency as 'USD' | 'EUR',
     frequency: e.frequency as UnifiedExpense['frequency'], startDate: e.startDate, endDate: e.endDate,
-    category: e.category === 'Living' ? 'Default' : (e.category || 'Default'), source: 'expense',
+    category: e.category === 'Living' ? 'Default' : (e.category || 'Default'), source: 'expense' as ExpSource,
+    sourceAccountId: e.sourceAccountId, installments: e.installments,
   }))
   return [...fromCoverage, ...fromMedical, ...fromExpenses]
     .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.startDate.localeCompare(b.startDate))
@@ -70,7 +76,81 @@ function blankExpense(): UnifiedExpense {
 
 function periodLabel(freq: string, startDate: string, endDate: string | null): string {
   if (freq === 'one_time') return monthLabel(startDate)
+  if (freq === 'custom') return 'custom'
   return endDate ? `${startDate} → ${endDate}` : `${startDate} →`
+}
+
+// ─── Installments editor ──────────────────────────────────────────────────────
+
+function InstallmentsEditor({
+  total,
+  currency,
+  installments,
+  onChange,
+}: {
+  total: number
+  currency: string
+  installments: ExpenseInstallment[]
+  onChange: (items: ExpenseInstallment[]) => void
+}) {
+  const paid = installments.reduce((s, i) => s + i.amount, 0)
+  const remaining = total - paid
+
+  function update(idx: number, patch: Partial<ExpenseInstallment>) {
+    onChange(installments.map((it, i) => i === idx ? { ...it, ...patch } : it))
+  }
+
+  function remove(idx: number) {
+    onChange(installments.filter((_, i) => i !== idx))
+  }
+
+  function add() {
+    onChange([...installments, { date: '2026-01', amount: remaining > 0 ? remaining : 0 }])
+  }
+
+  return (
+    <div className="col-span-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-[11px] text-gray-500">Installments</label>
+        <span className={`text-[11px] font-medium ${Math.abs(remaining) < 0.01 ? 'text-green-600' : remaining < 0 ? 'text-red-500' : 'text-amber-500'}`}>
+          {Math.abs(remaining) < 0.01
+            ? '✓ Fully covered'
+            : remaining > 0
+              ? `${formatCurrency(remaining, currency)} remaining`
+              : `${formatCurrency(-remaining, currency)} over budget`}
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {installments.map((it, idx) => (
+          <div key={idx} className="flex gap-2 items-center">
+            <input
+              className="h-[30px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 w-[100px]"
+              value={it.date}
+              onChange={e => update(idx, { date: e.target.value })}
+              placeholder="2026-01"
+            />
+            <input
+              type="number"
+              className="h-[30px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 w-[110px]"
+              value={it.amount}
+              onChange={e => update(idx, { amount: parseFloat(e.target.value) || 0 })}
+            />
+            <span className="text-[11px] text-gray-400">{currency}</span>
+            <button
+              className="text-[11px] text-red-400 hover:text-red-600"
+              onClick={() => remove(idx)}
+              type="button"
+            >×</button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="text-[11px] text-blue-600 hover:underline"
+        onClick={add}
+      >+ Add installment</button>
+    </div>
+  )
 }
 
 // ─── Edit form ────────────────────────────────────────────────────────────────
@@ -81,6 +161,8 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
   onSave: () => void
   onCancel: () => void
 }) {
+  const isCustom = editing.frequency === 'custom'
+
   return (
     <div className="border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4">
       <div className="grid grid-cols-3 gap-3">
@@ -102,7 +184,7 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
           </datalist>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-[11px] text-gray-500">Amount</label>
+          <label className="text-[11px] text-gray-500">{isCustom ? 'Total budget' : 'Amount'}</label>
           <input type="number" className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
             value={editing.amount} onChange={e => onChange({ amount: parseFloat(e.target.value) || 0 })} />
         </div>
@@ -116,24 +198,49 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Frequency</label>
           <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.frequency} onChange={e => onChange({ frequency: e.target.value as UnifiedExpense['frequency'] })}>
+            value={editing.frequency}
+            onChange={e => {
+              const freq = e.target.value as UnifiedExpense['frequency']
+              onChange({ frequency: freq, installments: freq === 'custom' ? (editing.installments ?? []) : undefined })
+            }}>
             <option value="monthly">Monthly</option>
             <option value="yearly">Yearly</option>
             <option value="one_time">One-time</option>
+            <option value="custom">Custom installments</option>
           </select>
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] text-gray-500">Start (YYYY-MM)</label>
-          <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.startDate} onChange={e => onChange({ startDate: e.target.value })} placeholder="2026-01" />
-        </div>
-        {editing.frequency !== 'one_time' && (
+        {!isCustom && (
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-gray-500">Start (YYYY-MM)</label>
+            <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+              value={editing.startDate} onChange={e => onChange({ startDate: e.target.value })} placeholder="2026-01" />
+          </div>
+        )}
+        {!isCustom && editing.frequency !== 'one_time' && (
           <div className="flex flex-col gap-1">
             <label className="text-[11px] text-gray-500">End (YYYY-MM, blank = ongoing)</label>
             <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
               value={editing.endDate ?? ''} onChange={e => onChange({ endDate: e.target.value || null })} placeholder="ongoing" />
           </div>
         )}
+        {isCustom && (
+          <InstallmentsEditor
+            total={editing.amount}
+            currency={editing.currency}
+            installments={editing.installments ?? []}
+            onChange={items => {
+              const first = items[0]?.date ?? editing.startDate
+              onChange({ installments: items, startDate: first })
+            }}
+          />
+        )}
+        <AccountSelect
+          label="Funded by account"
+          placeholder="Cash (unspecified)"
+          currency={editing.currency}
+          value={editing.sourceAccountId}
+          onChange={id => onChange({ sourceAccountId: id })}
+        />
       </div>
       <div className="flex gap-2">
         <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50" onClick={onCancel}>Cancel</button>
@@ -150,18 +257,23 @@ function ExpenseItem({ item, onEdit, onDelete }: {
   onEdit: () => void
   onDelete: () => void
 }) {
-  const note = recurrenceNote(item.frequency, item.startDate, item.endDate)
+  const note = item.frequency !== 'custom' ? recurrenceNote(item.frequency, item.startDate, item.endDate) : ''
   const period = periodLabel(item.frequency, item.startDate, item.endDate)
+  const accountName = useAccountName(item.sourceAccountId)
 
   return (
     <div className="flex items-center gap-2 py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0">
       <span className="text-[10px] text-gray-400 shrink-0 w-[80px]">{period}</span>
-      <span className="w-[14px] shrink-0 text-[11px] text-gray-400 text-center" title={item.frequency !== 'one_time' ? 'Recurring' : ''}>
-        {item.frequency !== 'one_time' ? '↻' : ''}
+      <span className="w-[14px] shrink-0 text-[11px] text-gray-400 text-center" title={item.frequency !== 'one_time' && item.frequency !== 'custom' ? 'Recurring' : ''}>
+        {item.frequency !== 'one_time' && item.frequency !== 'custom' ? '↻' : ''}
       </span>
       <span className="flex-1 min-w-0 truncate">
         <span className="text-[12px] text-gray-900 dark:text-white">{item.name}</span>
         {note && <span className="text-[10px] text-gray-400 ml-1.5">{note}</span>}
+        {item.frequency === 'custom' && item.installments && item.installments.length > 0 && (
+          <span className="text-[10px] text-gray-400 ml-1.5">{item.installments.length} installment{item.installments.length !== 1 ? 's' : ''}</span>
+        )}
+        {accountName && <span className="text-[10px] text-blue-500 ml-1.5">← {accountName}</span>}
       </span>
       <span className="text-[12px] font-medium shrink-0 text-red-500">
         −{formatCurrency(item.amount, item.currency)}
@@ -191,11 +303,11 @@ export default function Expenses() {
 
   function saveItem(item: UnifiedExpense) {
     if (item.source === 'coverage') {
-      upsertMedicalCoverage({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate })
+      upsertMedicalCoverage({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, sourceAccountId: item.sourceAccountId, installments: item.installments })
     } else if (item.source === 'medical') {
-      upsertMedicalExpense({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, category: item.category })
+      upsertMedicalExpense({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, category: item.category, sourceAccountId: item.sourceAccountId, installments: item.installments })
     } else {
-      upsertExpense({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, category: item.category })
+      upsertExpense({ id: item.id, name: item.name, amount: item.amount, currency: item.currency, frequency: item.frequency, startDate: item.startDate, endDate: item.endDate, category: item.category, sourceAccountId: item.sourceAccountId, installments: item.installments })
     }
   }
 

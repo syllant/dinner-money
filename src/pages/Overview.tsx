@@ -640,7 +640,7 @@ function UpcomingPanel({ title, items, colorClass, sign, emptyMsg }: {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function Dashboard() {
+export default function Overview() {
   const {
     accounts, simulationResult, simulationRunning, setSimulationRunning, setSimulationResult,
     profile, expenses, medicalCoverages, medicalExpenses, pensions, windfalls, realEstateEvents,

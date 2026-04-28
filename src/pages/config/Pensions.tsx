@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
 import { Badge } from '../../components/ui/Badge'
+import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect'
 import { formatCurrency, generateId } from '../../lib/format'
 import type { PensionEstimate, PensionSource } from '../../types'
 
@@ -25,6 +26,28 @@ const defaultPension = (source: PensionSource = 'US_SS'): PensionEstimate => ({
   currency: source === 'FR_RETRAITE' ? 'EUR' : 'USD',
   startAge: source === 'FR_RETRAITE' ? 64 : 67,
 })
+
+function PensionRow({ p, onEdit, onDelete }: { p: import('../../types').PensionEstimate; onEdit: () => void; onDelete: () => void }) {
+  const accountName = useAccountName(p.targetAccountId)
+  return (
+    <TableRow>
+      <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr_80px] gap-2 items-center">
+        <div>
+          <div>{SOURCE_LABELS[p.source] ?? p.source}</div>
+          {accountName && <div className="text-[10px] text-blue-500 mt-0.5">→ {accountName}</div>}
+        </div>
+        <span className="capitalize">{p.person}</span>
+        <span className="font-medium">{formatCurrency(p.monthlyAmount, p.currency)}</span>
+        <Badge variant={p.currency === 'EUR' ? 'eur' : 'usd'}>{p.currency}</Badge>
+        <span>{p.startAge}</span>
+        <div className="flex gap-2">
+          <button className="text-[11px] text-blue-600 hover:underline" onClick={onEdit}>Edit</button>
+          <button className="text-[11px] text-red-500 hover:underline" onClick={onDelete}>Del</button>
+        </div>
+      </div>
+    </TableRow>
+  )
+}
 
 export default function Pensions() {
   const { pensions, upsertPension, deletePension } = useAppStore()
@@ -81,6 +104,13 @@ export default function Pensions() {
                 <input type="number" className="h-[32px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
                   value={editing.startAge} onChange={e => setEditing({ ...editing, startAge: parseInt(e.target.value) })} />
               </div>
+              <AccountSelect
+                label="Deposited to account"
+                placeholder="Cash (unspecified)"
+                currency={editing.currency}
+                value={editing.targetAccountId}
+                onChange={id => setEditing({ ...editing, targetAccountId: id })}
+              />
             </div>
             <div className="flex gap-2 pt-1">
               <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50 dark:hover:bg-gray-800" onClick={() => setEditing(null)}>Cancel</button>
@@ -95,21 +125,7 @@ export default function Pensions() {
               <span>Source</span><span>Person</span><span>Monthly (est.)</span><span>Currency</span><span>Start age</span><span></span>
             </div>
           </TableHead>
-          {pensions.map(p => (
-            <TableRow key={p.id}>
-              <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr_80px] gap-2 items-center">
-                <span>{SOURCE_LABELS[p.source] ?? p.source}</span>
-                <span className="capitalize">{p.person}</span>
-                <span className="font-medium">{formatCurrency(p.monthlyAmount, p.currency)}</span>
-                <Badge variant={p.currency === 'EUR' ? 'eur' : 'usd'}>{p.currency}</Badge>
-                <span>{p.startAge}</span>
-                <div className="flex gap-2">
-                  <button className="text-[11px] text-blue-600 hover:underline" onClick={() => setEditing(p)}>Edit</button>
-                  <button className="text-[11px] text-red-500 hover:underline" onClick={() => deletePension(p.id)}>Del</button>
-                </div>
-              </div>
-            </TableRow>
-          ))}
+          {pensions.map(p => <PensionRow key={p.id} p={p} onEdit={() => setEditing(p)} onDelete={() => deletePension(p.id)} />)}
           <TableAddRow onClick={() => setEditing(defaultPension('US_SS'))}>+ Add pension source</TableAddRow>
         </Table>
       </div>
