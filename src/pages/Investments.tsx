@@ -330,9 +330,18 @@ export default function Investments() {
       for (const h of a.holdings) {
         const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
         const cat = empowerCategory(h.securityType, h.ticker, h.name)
-        const val = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
         const posLabel = h.ticker === 'CUR:EUR' ? 'EUR Cash' : tBill ? 'T-Bills' : (h.ticker || h.name.slice(0, 20))
-        addToCategory(cat, val, posLabel)
+        // fxSplitEUR override: IBKR reports EUR cash as CUR:USD — split it out
+        if (h.ticker === 'CUR:USD' && a.fxSplitEUR && a.fxSplitEUR > 0) {
+          const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          addToCategory('EUR Cash', eurBase, `${a.name} (EUR)`)
+          const eurAsUSD = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
+          const remainBase = convertToBase(Math.max(0, h.institutionValue - eurAsUSD), h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          if (remainBase > 0) addToCategory('Cash', remainBase, posLabel)
+        } else {
+          const val = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          addToCategory(cat, val, posLabel)
+        }
       }
     } else if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
       // Separate the EUR-denominated portion before applying allocation to the remainder
@@ -484,7 +493,7 @@ export default function Investments() {
       name: cur, fullName: cur, size: val, gain: null, isPseudo: false,
       categoryColor: currencyColor(cur, i),
       positions: undefined as Array<{ label: string; value: number }> | undefined,
-      nativeCurrency: cur, nativeValue: val, nativeGains: null,
+      nativeCurrency: profile.baseCurrency, nativeValue: val, nativeGains: null,
     }))
 
   const activeTreemapData =
@@ -534,12 +543,12 @@ export default function Investments() {
         )}
         {lines >= 2 && (
           <text x={x + width / 2} y={startY + lineH} textAnchor="middle" dominantBaseline="middle"
-            fill="white" fillOpacity={0.85} fontSize={8.5}>{formatCompact(size, profile.baseCurrency)}</text>
+            fill="white" fillOpacity={0.85} fontSize={8.5}>{formatCompact(nativeValue ?? size, nativeCurrency ?? profile.baseCurrency)}</text>
         )}
         {lines >= 3 && hasGain && (
           <text x={x + width / 2} y={startY + 2 * lineH} textAnchor="middle" dominantBaseline="middle"
             fill="white" fillOpacity={0.7} fontSize={8}>
-            {gain >= 0 ? '+' : ''}{formatCompact(gain, profile.baseCurrency)}
+            {gain >= 0 ? '+' : ''}{formatCompact(nativeGains ?? gain, nativeCurrency ?? profile.baseCurrency)}
           </text>
         )}
       </g>
