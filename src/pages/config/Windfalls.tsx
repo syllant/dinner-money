@@ -14,16 +14,20 @@ const TAX_LABELS: Record<TaxTreatment, string> = {
   TAX_FREE: 'Tax-free',
 }
 
+const INCOME_CATEGORIES = [
+  'Stock sale', 'Property sale', 'Rental income', 'Bonus', 'Gift', 'Inheritance', 'Insurance', 'Other income',
+]
+
 const blank = (): Windfall => ({
-  id: generateId(), name: '', date: '2027', amount: 0,
-  currency: 'USD', taxTreatment: 'CAPITAL_GAINS_LT', notes: '',
+  id: generateId(), name: '', date: '2027-06', amount: 0,
+  currency: 'USD', taxTreatment: 'CAPITAL_GAINS_LT', category: '', notes: '',
 })
 
-function WindfallRow({ w, onEdit, onDelete }: { w: Windfall; onEdit: () => void; onDelete: () => void }) {
+function WindfallRow({ w, onEdit, onDelete, onDuplicate }: { w: Windfall; onEdit: () => void; onDelete: () => void; onDuplicate: () => void }) {
   const accountName = useAccountName(w.targetAccountId)
   return (
     <TableRow>
-      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1.5fr_60px] gap-2 items-center">
+      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1.5fr_80px] gap-2 items-center">
         <div>
           <div className="font-medium">{w.name}</div>
           {accountName && <div className="text-[10px] text-blue-500 mt-0.5">→ {accountName}</div>}
@@ -31,9 +35,11 @@ function WindfallRow({ w, onEdit, onDelete }: { w: Windfall; onEdit: () => void;
         <span>{w.date}</span>
         <span>{w.amount ? formatCurrency(w.amount, w.currency) : 'TBD'}</span>
         <Badge variant={w.currency === 'EUR' ? 'eur' : 'usd'}>{w.currency}</Badge>
+        <span className="text-[11px] text-gray-500">{w.category || '—'}</span>
         <span className="text-[11px] text-gray-500">{TAX_LABELS[w.taxTreatment]}</span>
         <div className="flex gap-2">
           <button className="text-[11px] text-blue-600 hover:underline" onClick={onEdit}>Edit</button>
+          <button className="text-[11px] text-gray-400 hover:text-gray-600 hover:underline" onClick={onDuplicate}>Dup</button>
           <button className="text-[11px] text-red-500 hover:underline" onClick={onDelete}>Del</button>
         </div>
       </div>
@@ -44,6 +50,10 @@ function WindfallRow({ w, onEdit, onDelete }: { w: Windfall; onEdit: () => void;
 export default function Windfalls() {
   const { windfalls, upsertWindfall, deleteWindfall } = useAppStore()
   const [editing, setEditing] = useState<Windfall | null>(null)
+
+  function duplicate(w: Windfall) {
+    setEditing({ ...w, id: generateId() })
+  }
 
   return (
     <div>
@@ -58,9 +68,9 @@ export default function Windfalls() {
                   value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] text-gray-500">Date (YYYY or YYYY-MM)</label>
+                <label className="text-[11px] text-gray-500">Date (YYYY-MM)</label>
                 <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-                  value={editing.date} onChange={e => setEditing({ ...editing, date: e.target.value })} placeholder="2027" />
+                  value={editing.date} onChange={e => setEditing({ ...editing, date: e.target.value })} placeholder="2027-06" />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-[11px] text-gray-500">Amount</label>
@@ -80,6 +90,17 @@ export default function Windfalls() {
                   value={editing.taxTreatment} onChange={e => setEditing({ ...editing, taxTreatment: e.target.value as TaxTreatment })}>
                   {Object.entries(TAX_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-gray-500">Category</label>
+                <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                  list="income-categories"
+                  value={editing.category ?? ''}
+                  onChange={e => setEditing({ ...editing, category: e.target.value })}
+                  placeholder="e.g. Stock sale" />
+                <datalist id="income-categories">
+                  {INCOME_CATEGORIES.map(c => <option key={c} value={c} />)}
+                </datalist>
               </div>
               <div className="flex flex-col gap-1 col-span-2">
                 <label className="text-[11px] text-gray-500">Notes</label>
@@ -103,12 +124,12 @@ export default function Windfalls() {
         )}
         <Table>
           <TableHead>
-            <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1.5fr_60px] gap-2">
-              <span>Name</span><span>Date</span><span>Amount</span><span>Currency</span><span>Tax treatment</span><span></span>
+            <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1.5fr_80px] gap-2">
+              <span>Name</span><span>Date</span><span>Amount</span><span>Currency</span><span>Category</span><span>Tax treatment</span><span></span>
             </div>
           </TableHead>
           {windfalls.map(w => (
-            <WindfallRow key={w.id} w={w} onEdit={() => setEditing(w)} onDelete={() => deleteWindfall(w.id)} />
+            <WindfallRow key={w.id} w={w} onEdit={() => setEditing(w)} onDuplicate={() => duplicate(w)} onDelete={() => deleteWindfall(w.id)} />
           ))}
           <TableAddRow onClick={() => setEditing(blank())}>+ Add windfall</TableAddRow>
         </Table>

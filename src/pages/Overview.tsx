@@ -561,14 +561,13 @@ function buildUpcomingIncome(
     if (monthlyProjectedDiv > 0) {
       items.push({ key: `div-proj-${ym}`, date: ym, label: 'Dividends (est.)', note: 'monthly projection', amount: monthlyProjectedDiv, currency: 'EUR', recurring: true })
     }
-  }
-
-  const endTotalM = cm + futureMonths
-  const endYear = cy + Math.floor((endTotalM - 1) / 12)
-  for (const w of windfalls) {
-    const wYear = parseInt(w.date.split('-')[0])
-    if (wYear >= cy && wYear <= endYear) {
-      items.push({ key: `windfall-${w.id}`, date: `${wYear}-01`, label: w.name, note: '', amount: w.amount, currency: w.currency, recurring: false })
+    for (const w of windfalls) {
+      const wYear = parseInt(w.date.split('-')[0])
+      const wMonthStr = w.date.split('-')[1]
+      const wMonth = wMonthStr ? parseInt(wMonthStr) : 6  // YYYY-only dates default to June
+      if (wYear === year && wMonth === month) {
+        items.push({ key: `windfall-${w.id}`, date: ym, label: w.name, note: '', amount: w.amount, currency: w.currency, recurring: false })
+      }
     }
   }
 

@@ -29,6 +29,8 @@ function QuarterlyTable({
   currency?: string
   tableType: 'federal' | 'state'
 }) {
+  const accounts = useAppStore(s => s.accounts)
+  const cashAccounts = accounts.filter(a => ['cash', 'investment', 'retirement'].includes(a.type))
   const currentYear = new Date().getFullYear()
   const rows = payments.filter(p => p.year === currentYear)
 
@@ -57,28 +59,44 @@ function QuarterlyTable({
         const status = q.status ?? 'none'
         return (
           <TableRow key={q.quarter}>
-            <div className="grid grid-cols-[1fr_60px_100px_70px] gap-2 items-center">
-              <div>
-                <span className="text-[11.5px]">Q{q.quarter} {q.year}</span>
-                {pct && <span className="text-[10px] text-gray-400 ml-1">({pct})</span>}
+            <div className="space-y-1.5 py-0.5">
+              <div className="grid grid-cols-[1fr_60px_100px_70px] gap-2 items-center">
+                <div>
+                  <span className="text-[11.5px]">Q{q.quarter} {q.year}</span>
+                  {pct && <span className="text-[10px] text-gray-400 ml-1">({pct})</span>}
+                </div>
+                <span className="text-gray-500 text-[10.5px]">{due}</span>
+                <input
+                  type="number"
+                  className="h-[26px] w-full border border-gray-300 dark:border-gray-600 rounded px-2 text-[11px] bg-white dark:bg-gray-800"
+                  value={q.estimatedDue ?? ''}
+                  placeholder="—"
+                  onChange={e => onUpdate({ ...q, estimatedDue: e.target.value ? parseFloat(e.target.value) : null })}
+                />
+                <select
+                  className="h-[26px] w-full border border-gray-300 dark:border-gray-600 rounded px-1 text-[11px] bg-white dark:bg-gray-800"
+                  value={status}
+                  onChange={e => onUpdate({ ...q, status: e.target.value as PaymentStatus })}
+                >
+                  <option value="none">—</option>
+                  <option value="paid">Paid</option>
+                  <option value="todo">Due</option>
+                </select>
               </div>
-              <span className="text-gray-500 text-[10.5px]">{due}</span>
-              <input
-                type="number"
-                className="h-[26px] w-full border border-gray-300 dark:border-gray-600 rounded px-2 text-[11px] bg-white dark:bg-gray-800"
-                value={q.estimatedDue ?? ''}
-                placeholder="—"
-                onChange={e => onUpdate({ ...q, estimatedDue: e.target.value ? parseFloat(e.target.value) : null })}
-              />
-              <select
-                className="h-[26px] w-full border border-gray-300 dark:border-gray-600 rounded px-1 text-[11px] bg-white dark:bg-gray-800"
-                value={status}
-                onChange={e => onUpdate({ ...q, status: e.target.value as PaymentStatus })}
-              >
-                <option value="none">—</option>
-                <option value="paid">Paid</option>
-                <option value="todo">Due</option>
-              </select>
+              {/* Fund account selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 shrink-0">Funded by</span>
+                <select
+                  className="h-[24px] flex-1 border border-gray-200 dark:border-gray-700 rounded px-1 text-[11px] bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300"
+                  value={q.fundAccountId ?? ''}
+                  onChange={e => onUpdate({ ...q, fundAccountId: e.target.value ? parseInt(e.target.value) : undefined })}
+                >
+                  <option value="">Cash (default)</option>
+                  {cashAccounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.name} ({a.currency.toUpperCase()})</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </TableRow>
         )

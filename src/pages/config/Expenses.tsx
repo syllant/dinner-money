@@ -74,9 +74,17 @@ function blankExpense(): UnifiedExpense {
   }
 }
 
-function periodLabel(freq: string, startDate: string, endDate: string | null): string {
+function periodLabel(freq: string, startDate: string, endDate: string | null, installments?: ExpenseInstallment[]): string {
   if (freq === 'one_time') return monthLabel(startDate)
-  if (freq === 'custom') return 'custom'
+  if (freq === 'custom') {
+    if (installments && installments.length > 0) {
+      const dates = installments.map(i => i.date).sort()
+      const first = dates[0]
+      const last = dates[dates.length - 1]
+      return first === last ? first : `${first} → ${last}`
+    }
+    return 'custom'
+  }
   return endDate ? `${startDate} → ${endDate}` : `${startDate} →`
 }
 
@@ -105,7 +113,15 @@ function InstallmentsEditor({
   }
 
   function add() {
-    onChange([...installments, { date: '2026-01', amount: remaining > 0 ? remaining : 0 }])
+    const lastDate = installments.length > 0 ? installments[installments.length - 1].date : null
+    let nextDate = '2026-01'
+    if (lastDate) {
+      const [y, mo] = lastDate.split('-').map(Number)
+      const nextMo = mo === 12 ? 1 : mo + 1
+      const nextY = mo === 12 ? y + 1 : y
+      nextDate = `${nextY}-${String(nextMo).padStart(2, '0')}`
+    }
+    onChange([...installments, { date: nextDate, amount: remaining > 0 ? remaining : 0 }])
   }
 
   return (
@@ -252,13 +268,14 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
 
 // ─── Expense row ──────────────────────────────────────────────────────────────
 
-function ExpenseItem({ item, onEdit, onDelete }: {
+function ExpenseItem({ item, onEdit, onDelete, onDuplicate }: {
   item: UnifiedExpense
   onEdit: () => void
   onDelete: () => void
+  onDuplicate: () => void
 }) {
   const note = item.frequency !== 'custom' ? recurrenceNote(item.frequency, item.startDate, item.endDate) : ''
-  const period = periodLabel(item.frequency, item.startDate, item.endDate)
+  const period = periodLabel(item.frequency, item.startDate, item.endDate, item.installments)
   const accountName = useAccountName(item.sourceAccountId)
 
   return (
@@ -279,6 +296,7 @@ function ExpenseItem({ item, onEdit, onDelete }: {
         −{formatCurrency(item.amount, item.currency)}
       </span>
       <button className="text-[11px] text-blue-600 hover:underline shrink-0" onClick={onEdit}>Edit</button>
+      <button className="text-[11px] text-gray-400 hover:text-gray-600 hover:underline shrink-0" onClick={onDuplicate}>Dup</button>
       <button className="text-[11px] text-red-500 hover:underline shrink-0" onClick={onDelete}>Del</button>
     </div>
   )
@@ -298,8 +316,13 @@ export default function Expenses() {
 
   const all = flattenExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [])
 
-  const categories = Array.from(new Set(['Default', ...all.map(e => e.category)]))
-    .sort((a, b) => categoryOrder(a) - categoryOrder(b))
+  // Default first, then remaining categories sorted alphabetically
+  const allCats = Array.from(new Set(['Default', ...all.map(e => e.category)]))
+  const categories = allCats.sort((a, b) => {
+    if (a === 'Default') return -1
+    if (b === 'Default') return 1
+    return a.localeCompare(b)
+  })
 
   function saveItem(item: UnifiedExpense) {
     if (item.source === 'coverage') {
@@ -349,7 +372,7 @@ export default function Expenses() {
           return (
             <section key={cat}>
               <div className="flex items-center justify-between pb-[6px] border-b border-gray-200 dark:border-gray-700 mb-1">
-                <span className="text-[12.5px] font-medium">{cat}</span>
+                <span className="text-[12.5px] font-medium">{cat === 'Default' ? '[Default]' : cat}</span>
                 <span className="text-[11px] text-gray-400">
                   {totalEUR > 0 ? `~${formatCurrency(Math.round(totalEUR), 'EUR')}/mo` : ''}
                 </span>
@@ -364,6 +387,7 @@ export default function Expenses() {
                         key={item.id}
                         item={item}
                         onEdit={() => setEditing(item)}
+                        onDuplicate={() => setEditing({ ...item, id: generateId() })}
                         onDelete={() => deleteItem(item)}
                       />
                     ))}

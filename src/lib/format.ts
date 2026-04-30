@@ -26,9 +26,11 @@ export function formatCompact(amount: number, currency: Currency | string): stri
   if (amount == null || !isFinite(amount)) return '—'
   const c = currency.toUpperCase()
   const symbol = c === 'EUR' ? '€' : c === 'USD' ? '$' : c
-  if (Math.abs(amount) >= 1_000_000) return `${symbol}${(amount / 1_000_000).toFixed(1)}M`
-  if (Math.abs(amount) >= 1_000) return `${symbol}${(amount / 1_000).toFixed(0)}K`
-  return `${symbol}${amount.toFixed(0)}`
+  const sign = amount < 0 ? '−' : ''
+  const abs = Math.abs(amount)
+  if (abs >= 1_000_000) return `${sign}${symbol}${(abs / 1_000_000).toFixed(1)}M`
+  if (abs >= 1_000) return `${sign}${symbol}${(abs / 1_000).toFixed(0)}K`
+  return `${sign}${symbol}${abs.toFixed(0)}`
 }
 
 /** YYYY-MM → "Jul 2026" */

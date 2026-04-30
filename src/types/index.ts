@@ -144,6 +144,7 @@ export interface Windfall {
   amount: number
   currency: Currency
   taxTreatment: TaxTreatment
+  category?: string      // e.g. 'Stock sale', 'Rental income', 'Gift'
   notes: string
   targetAccountId?: number  // which account receives the proceeds
 }
@@ -172,6 +173,7 @@ export interface QuarterlyPayment {
   amountPaid: number | null
   estimatedDue: number | null
   status?: PaymentStatus
+  fundAccountId?: number   // which account funds this payment (if non-cash, bypasses cash flow)
 }
 
 export interface TaxConfig {

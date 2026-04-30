@@ -24,12 +24,12 @@ const blank = (): Transfer => ({
   endDate: null,
 })
 
-function TransferRow({ t, onEdit, onDelete }: { t: Transfer; onEdit: () => void; onDelete: () => void }) {
+function TransferRow({ t, onEdit, onDelete, onDuplicate }: { t: Transfer; onEdit: () => void; onDelete: () => void; onDuplicate: () => void }) {
   const fromName = useAccountName(t.fromAccountId)
   const toName = useAccountName(t.toAccountId)
   return (
     <TableRow>
-      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_60px] gap-2 items-center text-[12px]">
+      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_80px] gap-2 items-center text-[12px]">
         <div>
           <div className="font-medium">{t.name || '—'}</div>
           <div className="text-[10px] text-gray-400 mt-0.5">{FREQ_LABELS[t.frequency]}</div>
@@ -41,6 +41,7 @@ function TransferRow({ t, onEdit, onDelete }: { t: Transfer; onEdit: () => void;
         <span className="text-gray-500">{t.startDate}{t.endDate ? ` → ${t.endDate}` : ''}</span>
         <div className="flex gap-2">
           <button className="text-[11px] text-blue-600 hover:underline" onClick={onEdit}>Edit</button>
+          <button className="text-[11px] text-gray-400 hover:text-gray-600 hover:underline" onClick={onDuplicate}>Dup</button>
           <button className="text-[11px] text-red-500 hover:underline" onClick={onDelete}>Del</button>
         </div>
       </div>
@@ -51,6 +52,10 @@ function TransferRow({ t, onEdit, onDelete }: { t: Transfer; onEdit: () => void;
 export default function Transfers() {
   const { transfers, upsertTransfer, deleteTransfer } = useAppStore()
   const [editing, setEditing] = useState<Transfer | null>(null)
+
+  function duplicate(t: Transfer) {
+    setEditing({ ...t, id: generateId() })
+  }
 
   function save() {
     if (!editing || !editing.fromAccountId || !editing.toAccountId) return
@@ -147,7 +152,6 @@ export default function Transfers() {
               <AccountSelect
                 label="To account"
                 placeholder="Select target account"
-                currency={editing.currency}
                 value={editing.toAccountId || undefined}
                 onChange={id => setEditing({ ...editing, toAccountId: id ?? 0 })}
               />
@@ -168,7 +172,7 @@ export default function Transfers() {
 
         <Table>
           <TableHead>
-            <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_60px] gap-2">
+            <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_80px] gap-2">
               <span>Label</span><span>From</span><span></span><span>To</span><span>Amount</span><span>Date</span><span></span>
             </div>
           </TableHead>
@@ -176,7 +180,7 @@ export default function Transfers() {
             <TableRow><div className="text-gray-400 text-[12px]">No transfers defined yet.</div></TableRow>
           )}
           {transfers.map(t => (
-            <TransferRow key={t.id} t={t} onEdit={() => setEditing(t)} onDelete={() => deleteTransfer(t.id)} />
+            <TransferRow key={t.id} t={t} onEdit={() => setEditing(t)} onDuplicate={() => duplicate(t)} onDelete={() => deleteTransfer(t.id)} />
           ))}
           <TableAddRow onClick={() => setEditing(blank())}>+ Add transfer</TableAddRow>
         </Table>
