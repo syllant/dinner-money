@@ -65,10 +65,13 @@ function simulate(input: MCInput): MCOutput {
 
     // Pensions
     for (const p of pensions) {
-      const personAge = p.person === 'self' ? selfAge : year - profile.spouseBirthYear
-      if (personAge >= p.startAge) {
-        const annual = p.monthlyAmount * 12
-        flow += p.currency === 'EUR' ? annual : annual / rate
+      const pStart = parseInt(p.startDate.split('-')[0])
+      const pEnd = p.endDate ? parseInt(p.endDate.split('-')[0]) : 9999
+      if (year >= pStart && year <= pEnd) {
+        const annual = p.frequency === 'monthly' ? p.amount * 12 : p.frequency === 'yearly' ? p.amount : p.amount
+        if (p.frequency !== 'one_time' || (p.frequency === 'one_time' && year === pStart)) {
+          flow += p.currency === 'EUR' ? annual : annual / rate
+        }
       }
     }
 

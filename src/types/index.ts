@@ -88,9 +88,12 @@ export interface PensionEstimate {
   source: PensionSource
   label: string
   person: Person
-  monthlyAmount: number
+  amount: number
   currency: Currency
-  startAge: number
+  frequency: ExpenseFrequency
+  startDate: string
+  endDate: string | null
+  startAge?: number // legacy or used as a hint
   targetAccountId?: number   // which account receives these deposits
 }
 
@@ -140,12 +143,13 @@ export type TaxTreatment = 'CAPITAL_GAINS_LT' | 'CAPITAL_GAINS_ST' | 'ORDINARY_I
 export interface Windfall {
   id: string
   name: string
-  date: string           // YYYY or YYYY-MM
+  date: string           // YYYY or YYYY-MM (startDate for recurring)
+  endDate?: string | null
+  frequency: ExpenseFrequency  // default 'one_time'
   amount: number
   currency: Currency
   taxTreatment: TaxTreatment
   category?: string      // e.g. 'Stock sale', 'Rental income', 'Gift'
-  notes: string
   targetAccountId?: number  // which account receives the proceeds
 }
 

@@ -120,31 +120,26 @@ export function PlaidConnect({
   }
 
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-[11px] text-gray-400 dark:text-gray-500">
-        Holdings &amp; cost basis via Plaid
-      </span>
-      <div className="flex flex-col items-end gap-1">
-        <button
-          onClick={generateToken}
-          disabled={loading || !lmProxyUrl}
-          className="flex items-center gap-1.5 text-[11.5px] px-2.5 py-1 rounded-[5px] border border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-40 transition-colors"
-        >
-          {loading ? (
-            <>
-              <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1.5" strokeDasharray="6 6"/>
-              </svg>
-              Connecting…
-            </>
-          ) : (
-            'Connect Plaid'
-          )}
-        </button>
-        {error && (
-          <span className="text-[10px] text-red-500 max-w-[200px] text-right leading-tight">{error}</span>
+    <div className="flex flex-col gap-1">
+      <button
+        onClick={generateToken}
+        disabled={loading || !lmProxyUrl}
+        className="flex items-center gap-1.5 text-[11.5px] px-2.5 py-1 rounded-[5px] border border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-40 transition-colors"
+      >
+        {loading ? (
+          <>
+            <svg className="animate-spin" width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1.5" strokeDasharray="6 6"/>
+            </svg>
+            Connecting…
+          </>
+        ) : (
+          'Connect Plaid'
         )}
-      </div>
+      </button>
+      {error && (
+        <span className="text-[10px] text-red-500 max-w-[200px] text-right leading-tight">{error}</span>
+      )}
     </div>
   )
 }

@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
+import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
+import { SortBtn, useSort } from '../../components/ui/SortBtn'
 import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect'
 import { formatCurrency, generateId } from '../../lib/format'
-import { recurrenceNote, monthLabel } from '../../components/ui/FlowRow'
+import { NumericInput } from '../../components/ui/NumericInput'
+import {
+  periodLabel, getFrequencyDisplay,
+  CUR_BADGE, curBadgeClass, curSymbol,
+} from '../../components/ui/FrequencyDisplay'
+import { EditIcon, DupIcon, DelIcon } from '../../components/ui/Icons'
 import type { Expense, MedicalCoverage, MedicalExpense, ExpenseInstallment } from '../../types'
+
+type SortKey = 'period' | 'amount' | 'name' | 'account'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,19 +83,6 @@ function blankExpense(): UnifiedExpense {
   }
 }
 
-function periodLabel(freq: string, startDate: string, endDate: string | null, installments?: ExpenseInstallment[]): string {
-  if (freq === 'one_time') return monthLabel(startDate)
-  if (freq === 'custom') {
-    if (installments && installments.length > 0) {
-      const dates = installments.map(i => i.date).sort()
-      const first = dates[0]
-      const last = dates[dates.length - 1]
-      return first === last ? first : `${first} → ${last}`
-    }
-    return 'custom'
-  }
-  return endDate ? `${startDate} → ${endDate}` : `${startDate} →`
-}
 
 // ─── Installments editor ──────────────────────────────────────────────────────
 
@@ -171,18 +167,21 @@ function InstallmentsEditor({
 
 // ─── Edit form ────────────────────────────────────────────────────────────────
 
-function EditForm({ editing, onChange, onSave, onCancel }: {
+function EditForm({ editing, onChange, onSave, onCancel, categoryOptions, embedded }: {
   editing: UnifiedExpense
   onChange: (patch: Partial<UnifiedExpense>) => void
   onSave: () => void
   onCancel: () => void
+  categoryOptions: string[]
+  embedded?: boolean
 }) {
   const isCustom = editing.frequency === 'custom'
 
   return (
-    <div className="border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4">
-      <div className="grid grid-cols-3 gap-3">
-        <div className="flex flex-col gap-1 col-span-2">
+    <div className={embedded ? "space-y-3 mb-1" : "border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4"}>
+      {/* Row 1: Name (wide) + Category */}
+      <div className="grid grid-cols-[1fr_180px] gap-3">
+        <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Name</label>
           <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
             value={editing.name} onChange={e => onChange({ name: e.target.value })} autoFocus />
@@ -194,15 +193,22 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
             list="expense-categories"
             value={editing.category}
             onChange={e => onChange({ category: e.target.value })}
+            onFocus={e => e.target.select()}
           />
           <datalist id="expense-categories">
-            {CATEGORY_OPTIONS.map(c => <option key={c} value={c} />)}
+            {categoryOptions.map(c => <option key={c} value={c} />)}
           </datalist>
         </div>
+      </div>
+      {/* Row 2: Amount + Currency + Account */}
+      <div className="grid grid-cols-[1fr_100px_1fr] gap-3">
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">{isCustom ? 'Total budget' : 'Amount'}</label>
-          <input type="number" className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.amount} onChange={e => onChange({ amount: parseFloat(e.target.value) || 0 })} />
+          <NumericInput
+            className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800 w-full"
+            value={editing.amount}
+            onChange={v => onChange({ amount: v ?? 0 })}
+          />
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-[11px] text-gray-500">Currency</label>
@@ -211,35 +217,61 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
             <option value="USD">USD</option><option value="EUR">EUR</option>
           </select>
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] text-gray-500">Frequency</label>
-          <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
-            value={editing.frequency}
-            onChange={e => {
-              const freq = e.target.value as UnifiedExpense['frequency']
-              onChange({ frequency: freq, installments: freq === 'custom' ? (editing.installments ?? []) : undefined })
-            }}>
-            <option value="monthly">Monthly</option>
-            <option value="yearly">Yearly</option>
-            <option value="one_time">One-time</option>
-            <option value="custom">Custom installments</option>
-          </select>
-        </div>
-        {!isCustom && (
-          <div className="flex flex-col gap-1">
+        <AccountSelect
+          label="Funded by account"
+          placeholder="Cash (unspecified)"
+          currency={editing.currency}
+          value={editing.sourceAccountId}
+          onChange={id => onChange({ sourceAccountId: id })}
+        />
+      </div>
+      {/* Row 3: Frequency + Start + End (on same row, end hidden for one_time) */}
+      {!isCustom && (
+        <div className="flex gap-3">
+          <div className="flex flex-col gap-1 w-[160px] shrink-0">
+            <label className="text-[11px] text-gray-500">Frequency</label>
+            <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+              value={editing.frequency}
+              onChange={e => {
+                const freq = e.target.value as UnifiedExpense['frequency']
+                onChange({ frequency: freq, installments: freq === 'custom' ? (editing.installments ?? []) : undefined })
+              }}>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="one_time">One-time</option>
+              <option value="custom">Custom installments</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1 w-[120px] shrink-0">
             <label className="text-[11px] text-gray-500">Start (YYYY-MM)</label>
             <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
               value={editing.startDate} onChange={e => onChange({ startDate: e.target.value })} placeholder="2026-01" />
           </div>
-        )}
-        {!isCustom && editing.frequency !== 'one_time' && (
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] text-gray-500">End (YYYY-MM, blank = ongoing)</label>
-            <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-              value={editing.endDate ?? ''} onChange={e => onChange({ endDate: e.target.value || null })} placeholder="ongoing" />
+          {editing.frequency !== 'one_time' && (
+            <div className="flex flex-col gap-1 w-[130px] shrink-0">
+              <label className="text-[11px] text-gray-500">End (YYYY-MM)</label>
+              <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                value={editing.endDate ?? ''} onChange={e => onChange({ endDate: e.target.value || null })} placeholder="ongoing" />
+            </div>
+          )}
+        </div>
+      )}
+      {isCustom && (
+        <div className="flex gap-3 items-start">
+          <div className="flex flex-col gap-1 w-[160px] shrink-0">
+            <label className="text-[11px] text-gray-500">Frequency</label>
+            <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+              value={editing.frequency}
+              onChange={e => {
+                const freq = e.target.value as UnifiedExpense['frequency']
+                onChange({ frequency: freq, installments: freq === 'custom' ? (editing.installments ?? []) : undefined })
+              }}>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="one_time">One-time</option>
+              <option value="custom">Custom installments</option>
+            </select>
           </div>
-        )}
-        {isCustom && (
           <InstallmentsEditor
             total={editing.amount}
             currency={editing.currency}
@@ -249,15 +281,8 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
               onChange({ installments: items, startDate: first })
             }}
           />
-        )}
-        <AccountSelect
-          label="Funded by account"
-          placeholder="Cash (unspecified)"
-          currency={editing.currency}
-          value={editing.sourceAccountId}
-          onChange={id => onChange({ sourceAccountId: id })}
-        />
-      </div>
+        </div>
+      )}
       <div className="flex gap-2">
         <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50" onClick={onCancel}>Cancel</button>
         <button className="text-[11.5px] px-3 py-1 bg-green-50 border border-green-300 text-green-700 rounded-[5px] hover:bg-green-100" onClick={onSave}>Save</button>
@@ -268,37 +293,65 @@ function EditForm({ editing, onChange, onSave, onCancel }: {
 
 // ─── Expense row ──────────────────────────────────────────────────────────────
 
-function ExpenseItem({ item, onEdit, onDelete, onDuplicate }: {
+const GRID_COLS = 'grid grid-cols-[20px_130px_110px_2fr_1fr_72px] gap-x-3 items-center'
+
+function ExpenseRow({
+  item,
+  editing,
+  setEditing,
+  onSave,
+  onDuplicate,
+  onDelete,
+  categoryOptions
+}: {
   item: UnifiedExpense
-  onEdit: () => void
-  onDelete: () => void
+  editing: UnifiedExpense | null
+  setEditing: (item: UnifiedExpense | null) => void
+  onSave: () => void
   onDuplicate: () => void
+  onDelete: () => void
+  categoryOptions: string[]
 }) {
-  const note = item.frequency !== 'custom' ? recurrenceNote(item.frequency, item.startDate, item.endDate) : ''
   const period = periodLabel(item.frequency, item.startDate, item.endDate, item.installments)
   const accountName = useAccountName(item.sourceAccountId)
+  const freqDisplay = getFrequencyDisplay(item)
+  const curBdgCls = curBadgeClass(item.currency)
+  const curSym = curSymbol(item.currency)
 
   return (
-    <div className="flex items-center gap-2 py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0">
-      <span className="text-[10px] text-gray-400 shrink-0 w-[80px]">{period}</span>
-      <span className="w-[14px] shrink-0 text-[11px] text-gray-400 text-center" title={item.frequency !== 'one_time' && item.frequency !== 'custom' ? 'Recurring' : ''}>
-        {item.frequency !== 'one_time' && item.frequency !== 'custom' ? '↻' : ''}
-      </span>
-      <span className="flex-1 min-w-0 truncate">
-        <span className="text-[12px] text-gray-900 dark:text-white">{item.name}</span>
-        {note && <span className="text-[10px] text-gray-400 ml-1.5">{note}</span>}
-        {item.frequency === 'custom' && item.installments && item.installments.length > 0 && (
-          <span className="text-[10px] text-gray-400 ml-1.5">{item.installments.length} installment{item.installments.length !== 1 ? 's' : ''}</span>
-        )}
-        {accountName && <span className="text-[10px] text-blue-500 ml-1.5">← {accountName}</span>}
-      </span>
-      <span className="text-[12px] font-medium shrink-0 text-red-500">
-        −{formatCurrency(item.amount, item.currency)}
-      </span>
-      <button className="text-[11px] text-blue-600 hover:underline shrink-0" onClick={onEdit}>Edit</button>
-      <button className="text-[11px] text-gray-400 hover:text-gray-600 hover:underline shrink-0" onClick={onDuplicate}>Dup</button>
-      <button className="text-[11px] text-red-500 hover:underline shrink-0" onClick={onDelete}>Del</button>
-    </div>
+    <TableRow>
+      <div className={GRID_COLS}>
+        <span className="flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-help" title={freqDisplay.title}>
+          {freqDisplay.node}
+        </span>
+        <span className="text-[10.5px] text-gray-400 truncate">{period}</span>
+        <div className="flex items-center justify-end gap-1">
+          <span className="font-medium tabular-nums">{item.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+          <span className={`${CUR_BADGE} ${curBdgCls}`}>{curSym}</span>
+        </div>
+        <div className="min-w-0 truncate pl-2">
+          <span>{item.name}</span>
+        </div>
+        <span className="text-[10.5px] text-gray-400 truncate">{accountName ?? '—'}</span>
+        <div className="flex gap-2 justify-end">
+          <button className="text-gray-400 hover:text-blue-500" onClick={() => setEditing(item)}><EditIcon /></button>
+          <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" onClick={onDuplicate}><DupIcon /></button>
+          <button className="text-gray-400 hover:text-red-500" onClick={onDelete}><DelIcon /></button>
+        </div>
+      </div>
+      {editing?.id === item.id && (
+        <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/60">
+          <EditForm
+            editing={editing}
+            onChange={patch => setEditing({ ...editing, ...patch })}
+            onSave={onSave}
+            onCancel={() => setEditing(null)}
+            categoryOptions={categoryOptions}
+            embedded
+          />
+        </div>
+      )}
+    </TableRow>
   )
 }
 
@@ -313,16 +366,21 @@ export default function Expenses() {
   } = useAppStore()
 
   const [editing, setEditing] = useState<UnifiedExpense | null>(null)
+  const { sort, toggle: handleSort } = useSort<SortKey>('period')
 
   const all = flattenExpenses(expenses, medicalCoverages ?? [], medicalExpenses ?? [])
 
-  // Default first, then remaining categories sorted alphabetically
-  const allCats = Array.from(new Set(['Default', ...all.map(e => e.category)]))
-  const categories = allCats.sort((a, b) => {
-    if (a === 'Default') return -1
-    if (b === 'Default') return 1
-    return a.localeCompare(b)
-  })
+  const allCategoryOptions = Array.from(
+    new Set([...CATEGORY_OPTIONS, ...all.map(e => e.category)])
+  ).sort((a, b) => a.localeCompare(b))
+
+  // Group rows by category for display
+  const categories = Array.from(new Set(['Default', ...all.map(e => e.category)]))
+    .sort((a, b) => {
+      if (a === 'Default') return -1
+      if (b === 'Default') return 1
+      return a.localeCompare(b)
+    })
 
   function saveItem(item: UnifiedExpense) {
     if (item.source === 'coverage') {
@@ -352,51 +410,62 @@ export default function Expenses() {
       </PageHeader>
 
       <div className="p-4 space-y-4">
-        {editing && (
+        {editing && !all.find(e => e.id === editing.id) && (
           <EditForm
             editing={editing}
             onChange={patch => setEditing(e => e ? { ...e, ...patch } : e)}
             onSave={() => { saveItem(editing); setEditing(null) }}
             onCancel={() => setEditing(null)}
+            categoryOptions={allCategoryOptions}
           />
         )}
 
-        {categories.map(cat => {
-          const items = all.filter(e => e.category === cat)
-          const totalEUR = items.reduce((s, e) => {
-            const eur = e.currency === 'USD' ? e.amount / 1.08 : e.amount
-            const monthly = e.frequency === 'monthly' ? eur : e.frequency === 'yearly' ? eur / 12 : 0
-            return s + monthly
-          }, 0)
-
-          return (
-            <section key={cat}>
-              <div className="flex items-center justify-between pb-[6px] border-b border-gray-200 dark:border-gray-700 mb-1">
-                <span className="text-[12.5px] font-medium">{cat === 'Default' ? '[Default]' : cat}</span>
-                <span className="text-[11px] text-gray-400">
-                  {totalEUR > 0 ? `~${formatCurrency(Math.round(totalEUR), 'EUR')}/mo` : ''}
-                </span>
-              </div>
-              {items.length === 0 ? (
-                <div className="text-[11.5px] text-gray-400 italic px-1 py-1">No entries yet.</div>
-              ) : (
-                <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
-                  <div className="px-3">
-                    {items.map(item => (
-                      <ExpenseItem
-                        key={item.id}
-                        item={item}
-                        onEdit={() => setEditing(item)}
-                        onDuplicate={() => setEditing({ ...item, id: generateId() })}
-                        onDelete={() => deleteItem(item)}
-                      />
-                    ))}
-                  </div>
+        <Table>
+          <TableHead>
+            <div className={GRID_COLS}>
+              <span></span>
+              <SortBtn col="period" label="Period" sort={sort} onToggle={handleSort} />
+              <SortBtn col="amount" label="Amount" sort={sort} onToggle={handleSort} />
+              <SortBtn col="name" label="Name" sort={sort} onToggle={handleSort} />
+              <SortBtn col="account" label="Account" sort={sort} onToggle={handleSort} />
+              <span></span>
+            </div>
+          </TableHead>
+          {categories.map(cat => {
+            const items = all.filter(e => e.category === cat)
+            if (items.length === 0) return null
+            const sorted = [...items].sort((a, b) => {
+              let av: string | number, bv: string | number
+              if (sort.key === 'period') { av = a.startDate; bv = b.startDate }
+              else if (sort.key === 'amount') { av = a.amount; bv = b.amount }
+              else if (sort.key === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase() }
+              else { av = (a.sourceAccountId ?? ''); bv = (b.sourceAccountId ?? '') }
+              if (av < bv) return sort.dir === 'asc' ? -1 : 1
+              if (av > bv) return sort.dir === 'asc' ? 1 : -1
+              return 0
+            })
+            return (
+              <div key={cat}>
+                <div className="px-3 py-[6px] bg-gray-50/80 dark:bg-gray-800/40 border-t border-gray-200 dark:border-gray-700 text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                  {cat === 'Default' ? '[Default]' : cat}
                 </div>
-              )}
-            </section>
-          )
-        })}
+                {sorted.map(item => (
+                  <ExpenseRow
+                    key={item.id}
+                    item={item}
+                    editing={editing}
+                    setEditing={setEditing}
+                    onSave={() => { saveItem(editing!); setEditing(null) }}
+                    onDuplicate={() => setEditing({ ...item, id: generateId() })}
+                    onDelete={() => deleteItem(item)}
+                    categoryOptions={allCategoryOptions}
+                  />
+                ))}
+              </div>
+            )
+          })}
+          <TableAddRow onClick={() => setEditing(blankExpense())}>+ Add expense</TableAddRow>
+        </Table>
       </div>
     </div>
   )

@@ -283,6 +283,24 @@ export const useAppStore = create<AppState>()(
         dividendHistory: s.dividendHistory,
         dividendSyncedAt: s.dividendSyncedAt,
       }),
+      merge: (persistedState: any, currentState) => {
+        if (persistedState.pensions) {
+          persistedState.pensions = persistedState.pensions.map((p: any) => {
+            if (p.monthlyAmount !== undefined) {
+              const by = p.person === 'self' ? (persistedState.profile?.birthYear ?? 1975) : (persistedState.profile?.spouseBirthYear ?? 1975)
+              return {
+                ...p,
+                amount: p.monthlyAmount,
+                frequency: 'monthly',
+                startDate: `${by + (p.startAge || 65)}-01`,
+                endDate: null,
+              }
+            }
+            return p
+          })
+        }
+        return { ...currentState, ...persistedState } as AppState
+      },
     }
   )
 )

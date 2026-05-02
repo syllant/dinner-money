@@ -34,8 +34,7 @@ function useLifeEvents(): LifeEvent[] {
     events.push({ year: parseInt(w.date.split('-')[0]), label: w.name, color: '#854F0B', emoji: '★' })
   }
   for (const p of pensions) {
-    const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
-    const startYear = personBY + p.startAge
+    const startYear = parseInt(p.startDate.split('-')[0])
     if (startYear > now) {
       const personLabel = p.person === 'self' ? 'You' : 'Spouse'
       events.push({ year: startYear, label: `${p.label} (${personLabel})`, color: '#0F6E56', emoji: p.currency === 'EUR' ? '€' : '$' })
@@ -210,8 +209,14 @@ function LifetimeChart({ result, initialNW, expenses, medicalCoverages, medicalE
       const expenseItems: AnnualItem[] = []
 
       for (const p of pensions) {
-        const pAge = p.person === 'self' ? selfAge : y - profile.spouseBirthYear
-        if (pAge >= p.startAge) incomeItems.push({ label: p.label, amount: p.monthlyAmount * 12, currency: p.currency })
+        const startY = parseInt(p.startDate.split('-')[0])
+        const endY = p.endDate ? parseInt(p.endDate.split('-')[0]) : 9999
+        if (y >= startY && y <= endY) {
+           const annual = p.frequency === 'monthly' ? p.amount * 12 : p.amount
+           if (p.frequency !== 'one_time' || (p.frequency === 'one_time' && y === startY)) {
+             incomeItems.push({ label: p.label, amount: annual, currency: p.currency })
+           }
+        }
       }
       for (const w of windfalls) {
         if (parseInt(w.date.split('-')[0]) === y) incomeItems.push({ label: w.name, amount: w.amount, currency: w.currency })
@@ -340,9 +345,22 @@ function buildMonthlyData(
     const expenseItems: MonthItem[] = []
 
     for (const p of pensions) {
-      const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
-      if (personBY + p.startAge > year) continue
-      incomeItems.push({ label: p.label, amount: p.monthlyAmount, currency: p.currency, amountEUR: toEUR(p.monthlyAmount, p.currency) })
+      const startY = parseInt(p.startDate.split('-')[0])
+      const startM = parseInt(p.startDate.split('-')[1] ?? '1')
+      const endY = p.endDate ? parseInt(p.endDate.split('-')[0]) : null
+      const endM = p.endDate ? parseInt(p.endDate.split('-')[1] ?? '12') : null
+
+      const afterStart = year > startY || (year === startY && month >= startM)
+      const beforeEnd = endY === null || year < endY || (year === endY && month <= (endM ?? 12))
+      if (!afterStart || !beforeEnd) continue
+
+      if (p.frequency === 'monthly') {
+        incomeItems.push({ label: p.label, amount: p.amount, currency: p.currency, amountEUR: toEUR(p.amount, p.currency) })
+      } else if (p.frequency === 'yearly' && month === startM) {
+        incomeItems.push({ label: p.label, amount: p.amount, currency: p.currency, amountEUR: toEUR(p.amount, p.currency) })
+      } else if (p.frequency === 'one_time' && year === startY && month === startM) {
+        incomeItems.push({ label: p.label, amount: p.amount, currency: p.currency, amountEUR: toEUR(p.amount, p.currency) })
+      }
     }
 
     for (const acc of accounts) {
@@ -554,9 +572,22 @@ function buildUpcomingIncome(
     const month = safeMonth(totalM)
     const ym = `${year}-${String(month).padStart(2, '0')}`
     for (const p of pensions) {
-      const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
-      if (personBY + p.startAge > year) continue
-      items.push({ key: `pension-${p.id}-${ym}`, date: ym, label: p.label, note: 'monthly pension', amount: p.monthlyAmount, currency: p.currency, recurring: true })
+      const startY = parseInt(p.startDate.split('-')[0])
+      const startM = parseInt(p.startDate.split('-')[1] ?? '1')
+      const endY = p.endDate ? parseInt(p.endDate.split('-')[0]) : null
+      const endM = p.endDate ? parseInt(p.endDate.split('-')[1] ?? '12') : null
+
+      const afterStart = year > startY || (year === startY && month >= startM)
+      const beforeEnd = endY === null || year < endY || (year === endY && month <= (endM ?? 12))
+      if (!afterStart || !beforeEnd) continue
+
+      if (p.frequency === 'monthly') {
+        items.push({ key: `pension-${p.id}-${ym}`, date: ym, label: p.label, note: 'monthly pension', amount: p.amount, currency: p.currency, recurring: true })
+      } else if (p.frequency === 'yearly' && month === startM) {
+        items.push({ key: `pension-${p.id}-${year}`, date: ym, label: p.label, note: 'yearly pension', amount: p.amount, currency: p.currency, recurring: true })
+      } else if (p.frequency === 'one_time' && year === startY && month === startM) {
+        items.push({ key: `pension-${p.id}-ot`, date: ym, label: p.label, note: 'one-time', amount: p.amount, currency: p.currency, recurring: false })
+      }
     }
     if (monthlyProjectedDiv > 0) {
       items.push({ key: `div-proj-${ym}`, date: ym, label: 'Dividends (est.)', note: 'monthly projection', amount: monthlyProjectedDiv, currency: 'EUR', recurring: true })

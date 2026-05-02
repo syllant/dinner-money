@@ -196,13 +196,27 @@ export default function Investments() {
 
   // ── Core totals (included accounts only) ──
 
+  const getAccountBaseValue = (a: typeof accounts[0]) => {
+    if (a.holdings && a.holdings.length > 0) {
+      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+    }
+    return convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+  }
+
+  const getAccountNativeValue = (a: typeof accounts[0]) => {
+    if (a.holdings && a.holdings.length > 0) {
+      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, a.currency, DEFAULT_EUR_USD_RATE), 0)
+    }
+    return a.balance
+  }
+
   const invested = includedAccounts
     .filter(a => a.type === 'investment' || a.type === 'retirement')
-    .reduce((s, a) => s + convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+    .reduce((s, a) => s + getAccountBaseValue(a), 0)
 
   const totalBase = includedAccounts
     .filter(a => a.type !== 'real_estate')
-    .reduce((s, a) => s + convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+    .reduce((s, a) => s + getAccountBaseValue(a), 0)
 
   // ── Holdings + gains — with T-Bill consolidation ──
 
@@ -219,7 +233,7 @@ export default function Investments() {
   let totalEq = 0, totalBd = 0, totalCash = 0
 
   for (const a of includedAccounts) {
-    const b = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    const b = getAccountBaseValue(a)
     totalEq += b * a.allocation.equity / 100
     totalBd += b * a.allocation.bonds / 100
     totalCash += b * a.allocation.cash / 100
@@ -227,12 +241,12 @@ export default function Investments() {
     if (a.holdings && a.holdings.length > 0) {
       plaidLinkedCount++
       for (const h of a.holdings) {
-        const valBase = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
         let gainBase: number | null = null
         let isShortTerm: boolean | null = null
 
         if (h.costBasis != null && h.costBasis > 0) {
-          const costBase = convertToBase(h.costBasis, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const costBase = convertToBase(h.costBasis, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
           totalCostBasis += costBase
           const gain = valBase - costBase
           totalUnrealizedGains += gain
@@ -303,7 +317,7 @@ export default function Investments() {
 
   const byCurrency: Record<string, number> = {}
   for (const a of includedAccounts.filter(a => a.type !== 'real_estate')) {
-    const baseVal = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    const baseVal = getAccountBaseValue(a)
     if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
       const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
       const eurInAcc = convertToBase(a.fxSplitEUR, 'EUR', a.currency as 'EUR' | 'USD', DEFAULT_EUR_USD_RATE)
@@ -312,7 +326,7 @@ export default function Investments() {
     } else if (a.holdings && a.holdings.length > 0) {
       for (const h of a.holdings) {
         const c = h.ticker?.match(/^CUR:([A-Z]{3})$/)?.[1] ?? h.currency.toUpperCase()
-        byCurrency[c] = (byCurrency[c] ?? 0) + convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        byCurrency[c] = (byCurrency[c] ?? 0) + convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
       }
     } else {
       byCurrency[a.currency.toUpperCase()] = (byCurrency[a.currency.toUpperCase()] ?? 0) + baseVal
@@ -334,7 +348,7 @@ export default function Investments() {
 
   for (const a of includedAccounts) {
     if (a.type === 'loan' || a.type === 'credit' || a.type === 'real_estate') continue
-    const b = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    const b = getAccountBaseValue(a)
     if (a.holdings && a.holdings.length > 0) {
       for (const h of a.holdings) {
         const tBill = isTreasuryBill(h.ticker, h.securityType, h.name)
@@ -345,10 +359,10 @@ export default function Investments() {
           const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
           addToCategory('EUR', eurBase, `${a.name} (EUR)`)
           const eurAsUSD = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
-          const remainBase = convertToBase(Math.max(0, h.institutionValue - eurAsUSD), h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const remainBase = convertToBase(Math.max(0, h.institutionValue - eurAsUSD), h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
           if (remainBase > 0) addToCategory('USD', remainBase, posLabel)
         } else {
-          const val = convertToBase(h.institutionValue, h.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const val = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
           addToCategory(cat, val, posLabel)
         }
       }
@@ -390,7 +404,7 @@ export default function Investments() {
         .map(d => ({
           ticker: h.ticker!, paymentDate: d.paymentDate, amount: d.amount,
           sharesHeld: h.quantity, totalAmount: d.amount * h.quantity,
-          currency: h.currency, accountId: String(a.id), accountName: a.name, isActual: true,
+          currency: h.currency as Currency, accountId: String(a.id), accountName: a.name, isActual: true,
         }))
       )
     )
@@ -400,7 +414,7 @@ export default function Investments() {
       .filter(h => h.ticker && !/^CUR:/.test(h.ticker) && (dividendHistory[h.ticker!]?.length ?? 0) > 0)
       .flatMap(h => projectDividends(h.ticker!, dividendHistory[h.ticker!], h.quantity, 20)
         .filter(d => d.paymentDate >= todayStr && d.paymentDate <= rangeEnd)
-        .map(d => ({ ...d, currency: h.currency, accountId: String(a.id), accountName: a.name, isActual: false }))
+        .map(d => ({ ...d, currency: h.currency as Currency, accountId: String(a.id), accountName: a.name, isActual: false }))
       )
     )
 
@@ -516,6 +530,8 @@ export default function Investments() {
     treemapView === 'allocation' ? allocTreemapData :
     currencyTreemapData
 
+  const activeTreemapTotal = activeTreemapData.reduce((s, d) => s + d.size, 0)
+
   const syncedAtStr = dividendSyncedAt
     ? new Date(dividendSyncedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     : null
@@ -530,11 +546,22 @@ export default function Investments() {
     const positive = (gain ?? 0) >= 0
     const fill = categoryColor ?? (hasGain ? (positive ? '#16a34a' : '#dc2626') : '#3b82f6')
 
-    const lineH = 11
-    const showValue = width > 36 && height > 28
-    const showGain = width > 36 && height > 50 && hasGain
+    const lineH = 13
+    const showValue = width > 46 && height > 34
+    const showGain = width > 56 && height > 50 && hasGain
     const lines = showGain ? 3 : showValue ? 2 : (width > 28 && height > 16) ? 1 : 0
     const startY = y + height / 2 - ((lines - 1) * lineH) / 2
+
+    const pct = activeTreemapTotal > 0 ? (size / activeTreemapTotal) * 100 : 0
+
+    let gainPctStr = ''
+    if (hasGain) {
+      const g = nativeGains ?? gain
+      const v = nativeValue ?? size
+      const cb = v - g
+      const gPct = cb > 0 ? (g / cb) * 100 : 0
+      gainPctStr = ` (${g >= 0 ? '+' : ''}${gPct.toFixed(1)}%)`
+    }
 
     return (
       <g
@@ -554,21 +581,23 @@ export default function Investments() {
           stroke="white" strokeWidth={1.5} rx={2} />
         {lines >= 1 && (
           <text x={x + width / 2} y={startY} textAnchor="middle" dominantBaseline="middle"
-            fill="white" fontSize={Math.min(11, Math.max(8, width / 6))} fontWeight={600}>{name}</text>
+            fill="white" fontSize={Math.min(12, Math.max(9, width / 6))} fontWeight={600}>{name}</text>
         )}
         {lines >= 2 && (
           <text x={x + width / 2} y={startY + lineH} textAnchor="middle" dominantBaseline="middle"
-            fill="white" fillOpacity={0.85} fontSize={8.5}>{formatCompact(nativeValue ?? size, nativeCurrency ?? profile.baseCurrency)}</text>
+            fill="white" fillOpacity={0.9} fontSize={10} fontWeight={500}>
+            {formatCompact(nativeValue ?? size, nativeCurrency ?? profile.baseCurrency)} ({pct.toFixed(1)}%)
+          </text>
         )}
         {lines >= 3 && hasGain && (
           <text x={x + width / 2} y={startY + 2 * lineH} textAnchor="middle" dominantBaseline="middle"
-            fill="white" fillOpacity={0.7} fontSize={8}>
-            {gain >= 0 ? '+' : ''}{formatCompact(nativeGains ?? gain, nativeCurrency ?? profile.baseCurrency)}
+            fill="white" fillOpacity={0.8} fontSize={9}>
+            {gain >= 0 ? '+' : ''}{formatCompact(nativeGains ?? gain, nativeCurrency ?? profile.baseCurrency)}{gainPctStr}
           </text>
         )}
       </g>
     )
-  }, [profile.baseCurrency])
+  }, [profile.baseCurrency, activeTreemapTotal])
 
   const portfolioAccounts = includedAccounts.filter(a => a.type === 'investment' || a.type === 'retirement')
 
@@ -734,10 +763,18 @@ export default function Investments() {
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <div className="font-medium">{formatCurrency(a.balance, a.currency)}</div>
-                      {a.currency.toUpperCase() !== profile.baseCurrency && (
-                        <div className="text-[10px] text-gray-400">{formatCompact(convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), profile.baseCurrency)}</div>
-                      )}
+                      {(() => {
+                        const nativeVal = getAccountNativeValue(a)
+                        const baseVal = getAccountBaseValue(a)
+                        return (
+                          <>
+                            <div className="font-medium">{formatCurrency(nativeVal, a.currency)}</div>
+                            {a.currency.toUpperCase() !== profile.baseCurrency && (
+                              <div className="text-[10px] text-gray-400">{formatCompact(baseVal, profile.baseCurrency)}</div>
+                            )}
+                          </>
+                        )
+                      })()}
                     </div>
                   </div>
                 ))}

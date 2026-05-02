@@ -7,3 +7,5 @@ dist
 .claude/
 CLAUDE.local.md
 worker/.dev.vars
+worker/.wrangler/
+*.tsbuildinfo

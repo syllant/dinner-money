@@ -14,27 +14,128 @@ const blank = (): RealEstateEvent => ({
   currency: 'USD', isRecurring: false, endDate: null, notes: '',
 })
 
-function RealEstateRow({ e, onEdit, onDelete }: { e: RealEstateEvent; onEdit: () => void; onDelete: () => void }) {
+import { EditIcon, DelIcon } from '../../components/ui/Icons'
+import { OneTimeIcon, RecurringIcon, CUR_BADGE, curBadgeClass, curSymbol } from '../../components/ui/FrequencyDisplay'
+
+const GRID_COLS = 'grid grid-cols-[20px_130px_110px_1fr_2fr_72px] gap-x-3 items-center'
+
+function RealEstateRow({
+  e,
+  editing,
+  setEditing,
+  onSave,
+  onDelete
+}: {
+  e: RealEstateEvent;
+  editing: RealEstateEvent | null;
+  setEditing: (e: RealEstateEvent | null) => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
   const accountId = e.eventType === 'sell' ? e.targetAccountId : e.sourceAccountId
   const accountName = useAccountName(accountId)
   const arrow = e.eventType === 'sell' ? '→' : '←'
+  const isEditing = editing?.id === e.id
+  
+  const period = e.endDate ? `${e.date} → ${e.endDate}` : (e.isRecurring ? `${e.date} →` : e.date)
+
   return (
     <TableRow>
-      <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1.4fr_60px] gap-2 items-center">
-        <span>{TYPE_LABELS[e.eventType]}</span>
-        <span>{e.date}</span>
-        <span className="text-gray-400">{e.endDate ?? (e.isRecurring ? 'ongoing' : '—')}</span>
-        <span className="font-medium">{formatCurrency(e.amount, e.currency)}{e.isRecurring ? '/mo' : ''}</span>
-        <Badge variant={e.currency === 'EUR' ? 'eur' : 'usd'}>{e.currency}</Badge>
-        <div className="min-w-0">
-          {e.notes && <div className="text-[11px] text-gray-400 truncate">{e.notes}</div>}
-          {accountName && <div className="text-[10px] text-blue-500">{arrow} {accountName}</div>}
+      <div className={GRID_COLS}>
+        <span className="flex items-center justify-center text-gray-400">
+          {e.isRecurring ? <RecurringIcon letter="m" /> : <OneTimeIcon />}
+        </span>
+        <span className="text-[10.5px] text-gray-400 truncate">{period}</span>
+        <div className="flex items-center justify-end gap-1">
+          <span className="font-medium tabular-nums">{e.amount.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span>
+          <span className={`${CUR_BADGE} ${curBadgeClass(e.currency)}`}>{curSymbol(e.currency)}</span>
         </div>
+        <span className="truncate">{TYPE_LABELS[e.eventType]}</span>
+        <span className="text-[10.5px] text-gray-400 truncate">
+          {accountName ? `${arrow} ${accountName}` : '—'}
+        </span>
         <div className="flex gap-2">
-          <button className="text-[11px] text-blue-600 hover:underline" onClick={onEdit}>Edit</button>
-          <button className="text-[11px] text-red-500 hover:underline" onClick={onDelete}>Del</button>
+          <button className="text-gray-400 hover:text-blue-500" onClick={() => setEditing(e)}><EditIcon /></button>
+          <button className="text-gray-400 hover:text-red-500" onClick={onDelete}><DelIcon /></button>
         </div>
       </div>
+
+      {isEditing && (
+        <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/60 space-y-3">
+          <h3 className="text-[13px] font-medium">Edit event</h3>
+          {/* Row 1: Type */}
+          <div className="grid grid-cols-[1fr] gap-3">
+            <div className="flex flex-col gap-1 w-[150px]">
+              <label className="text-[11px] text-gray-500">Type</label>
+              <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+                value={editing.eventType}
+                onChange={ev => setEditing({ ...editing, eventType: ev.target.value as RealEstateEvent['eventType'] })}>
+                <option value="sell">Sell</option><option value="buy">Buy</option><option value="rent">Rent</option>
+              </select>
+            </div>
+          </div>
+          {/* Row 2: Amount + Currency + Account */}
+          <div className="grid grid-cols-[150px_100px_1fr] gap-3 mt-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-gray-500">Amount</label>
+              <input type="number" className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                value={editing.amount} onChange={ev => setEditing({ ...editing, amount: parseFloat(ev.target.value) })} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-gray-500">Currency</label>
+              <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+                value={editing.currency} onChange={ev => setEditing({ ...editing, currency: ev.target.value as 'USD' | 'EUR' })}>
+                <option value="USD">USD</option><option value="EUR">EUR</option>
+              </select>
+            </div>
+            {editing.eventType === 'sell'
+              ? <AccountSelect
+                  label="Proceeds deposited to"
+                  placeholder="Cash (unspecified)"
+                  currency={editing.currency}
+                  value={editing.targetAccountId}
+                  onChange={id => setEditing({ ...editing, targetAccountId: id })}
+                />
+              : <AccountSelect
+                  label="Payment funded by"
+                  placeholder="Cash (unspecified)"
+                  currency={editing.currency}
+                  value={editing.sourceAccountId}
+                  onChange={id => setEditing({ ...editing, sourceAccountId: id })}
+                />
+            }
+          </div>
+          {/* Row 3: Frequency + Dates */}
+          <div className="grid grid-cols-[120px_140px_140px] gap-3 mt-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-gray-500">Frequency</label>
+              <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+                value={editing.isRecurring ? 'monthly' : 'one_time'}
+                onChange={ev => setEditing({ ...editing, isRecurring: ev.target.value === 'monthly' })}>
+                <option value="monthly">Monthly</option>
+                <option value="one_time">One-time</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] text-gray-500">{editing.isRecurring ? 'Start' : 'Date'} (YYYY-MM)</label>
+              <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                value={editing.date} onChange={ev => setEditing({ ...editing, date: ev.target.value })} />
+            </div>
+            {editing.isRecurring && (
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-gray-500">End date (YYYY-MM)</label>
+                <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                  value={editing.endDate ?? ''} placeholder="ongoing"
+                  onChange={ev => setEditing({ ...editing, endDate: ev.target.value || null })} />
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50 dark:hover:bg-gray-800" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="text-[11.5px] px-3 py-1 bg-green-50 border border-green-300 text-green-700 rounded-[5px] hover:bg-green-100" onClick={onSave}>Save</button>
+          </div>
+        </div>
+      )}
     </TableRow>
   )
 }
@@ -47,11 +148,12 @@ export default function RealEstate() {
     <div>
       <PageHeader title="Real estate" />
       <div className="p-4 space-y-3">
-        {editing && (
-          <div className="border border-blue-200 dark:border-blue-700 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3">
-            <h3 className="text-[13px] font-medium">Edit event</h3>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="flex flex-col gap-1">
+        {editing && !realEstateEvents.find(e => e.id === editing.id) && (
+          <div className="border border-blue-200 dark:border-blue-700 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4">
+            <h3 className="text-[13px] font-medium">Add event</h3>
+            {/* Row 1: Type */}
+            <div className="grid grid-cols-[1fr] gap-3">
+              <div className="flex flex-col gap-1 w-[150px]">
                 <label className="text-[11px] text-gray-500">Type</label>
                 <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
                   value={editing.eventType}
@@ -59,11 +161,9 @@ export default function RealEstate() {
                   <option value="sell">Sell</option><option value="buy">Buy</option><option value="rent">Rent</option>
                 </select>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] text-gray-500">Date (YYYY-MM)</label>
-                <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-                  value={editing.date} onChange={e => setEditing({ ...editing, date: e.target.value })} />
-              </div>
+            </div>
+            {/* Row 2: Amount + Currency + Account */}
+            <div className="grid grid-cols-[150px_100px_1fr] gap-3 mt-3">
               <div className="flex flex-col gap-1">
                 <label className="text-[11px] text-gray-500">Amount</label>
                 <input type="number" className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
@@ -75,17 +175,6 @@ export default function RealEstate() {
                   value={editing.currency} onChange={e => setEditing({ ...editing, currency: e.target.value as 'USD' | 'EUR' })}>
                   <option value="USD">USD</option><option value="EUR">EUR</option>
                 </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[11px] text-gray-500">End date (YYYY-MM, rentals)</label>
-                <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-                  value={editing.endDate ?? ''} placeholder="ongoing"
-                  onChange={e => setEditing({ ...editing, endDate: e.target.value || null })} />
-              </div>
-              <div className="flex flex-col gap-1 col-span-2">
-                <label className="text-[11px] text-gray-500">Notes / label</label>
-                <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
-                  value={editing.notes} onChange={e => setEditing({ ...editing, notes: e.target.value })} />
               </div>
               {editing.eventType === 'sell'
                 ? <AccountSelect
@@ -104,8 +193,33 @@ export default function RealEstate() {
                   />
               }
             </div>
+            {/* Row 3: Frequency + Dates */}
+            <div className="grid grid-cols-[120px_140px_140px] gap-3 mt-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-gray-500">Frequency</label>
+                <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
+                  value={editing.isRecurring ? 'monthly' : 'one_time'}
+                  onChange={e => setEditing({ ...editing, isRecurring: e.target.value === 'monthly' })}>
+                  <option value="monthly">Monthly</option>
+                  <option value="one_time">One-time</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] text-gray-500">{editing.isRecurring ? 'Start' : 'Date'} (YYYY-MM)</label>
+                <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                  value={editing.date} onChange={e => setEditing({ ...editing, date: e.target.value })} />
+              </div>
+              {editing.isRecurring && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-gray-500">End date (YYYY-MM)</label>
+                  <input className="h-[32px] border border-gray-300 rounded-[5px] px-3 text-[12px] bg-white dark:bg-gray-800"
+                    value={editing.endDate ?? ''} placeholder="ongoing"
+                    onChange={e => setEditing({ ...editing, endDate: e.target.value || null })} />
+                </div>
+              )}
+            </div>
             <div className="flex gap-2">
-              <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50 dark:hover:bg-gray-800" onClick={() => setEditing(null)}>Cancel</button>
               <button className="text-[11.5px] px-3 py-1 bg-green-50 border border-green-300 text-green-700 rounded-[5px] hover:bg-green-100"
                 onClick={() => { upsertRealEstateEvent(editing); setEditing(null) }}>Save</button>
             </div>
@@ -113,12 +227,24 @@ export default function RealEstate() {
         )}
         <Table>
           <TableHead>
-            <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1.4fr_60px] gap-2">
-              <span>Event</span><span>Start</span><span>End</span><span>Amount</span><span>Currency</span><span>Notes / Account</span><span></span>
+            <div className={GRID_COLS}>
+              <span></span>
+              <span>Period</span>
+              <span className="text-right pr-1">Amount</span>
+              <span>Event</span>
+              <span>Account</span>
+              <span></span>
             </div>
           </TableHead>
           {realEstateEvents.map(e => (
-            <RealEstateRow key={e.id} e={e} onEdit={() => setEditing(e)} onDelete={() => deleteRealEstateEvent(e.id)} />
+            <RealEstateRow
+              key={e.id}
+              e={e}
+              editing={editing}
+              setEditing={setEditing}
+              onSave={() => { upsertRealEstateEvent(editing!); setEditing(null) }}
+              onDelete={() => deleteRealEstateEvent(e.id)}
+            />
           ))}
           <TableAddRow onClick={() => setEditing(blank())}>+ Add event</TableAddRow>
         </Table>

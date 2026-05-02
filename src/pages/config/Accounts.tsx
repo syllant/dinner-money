@@ -4,12 +4,15 @@ import { PageHeader } from '../../components/ui/PageHeader'
 import { Banner } from '../../components/ui/Banner'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
 import { Badge } from '../../components/ui/Badge'
+import { SortBtn, useSort } from '../../components/ui/SortBtn'
 import { fetchAllAccounts, mapLMType, LunchMoneyError } from '../../lib/lunchmoney'
 import { formatCurrency } from '../../lib/format'
 import { convertToBase, DEFAULT_EUR_USD_RATE } from '../../lib/currency'
 import { NumericInput } from '../../components/ui/NumericInput'
 import { PlaidConnect } from '../../components/PlaidConnect'
 import { fetchPlaidHoldings, fetchPlaidInvestmentData, computeAllocationFromHoldings } from '../../lib/plaid'
+import { EditIcon } from '../../components/ui/Icons'
+import { CUR_BADGE, curBadgeClass, curSymbol } from '../../components/ui/FrequencyDisplay'
 import type { Account } from '../../types'
 
 // ─── Type chip config ──────────────────────────────────────────────────────────
@@ -26,28 +29,10 @@ const TYPE_META: Record<Account['type'], { label: string; variant: BadgeVariant 
   other:       { label: 'Other',       variant: 'neutral' },
 }
 
-// ─── Sort button ───────────────────────────────────────────────────────────────
+// ─── Column layout ─────────────────────────────────────────────────────────────
 
 type SortKey = 'name' | 'balance' | 'currency' | 'type'
 
-function SortBtn({ col, label, sortKey, sortDir, onClick }: {
-  col: SortKey; label: string; sortKey: SortKey; sortDir: 'asc' | 'desc'; onClick: () => void
-}) {
-  const active = sortKey === col
-  return (
-    <button
-      className="flex items-center gap-0.5 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors text-left"
-      onClick={onClick}
-    >
-      {label}
-      <span className={`text-[9px] ${active ? 'text-blue-500' : 'text-gray-300 dark:text-gray-600'}`}>
-        {active ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}
-      </span>
-    </button>
-  )
-}
-
-// ─── Characteristics view / edit ───────────────────────────────────────────────
 
 function CharacteristicsView({ acc }: { acc: Account }) {
   if (acc.type === 'investment' || acc.type === 'retirement') {
@@ -83,31 +68,6 @@ function CharacteristicsEdit({ acc, onUpdate }: {
   acc: Account
   onUpdate: (patch: Partial<Account>) => void
 }) {
-  if (acc.type === 'investment' || acc.type === 'retirement') {
-    if (acc.plaidAccessToken) {
-      return (
-        <div className="text-[11px] text-gray-400 dark:text-gray-500 italic">
-          Allocation auto-computed from Plaid holdings
-        </div>
-      )
-    }
-    return (
-      <div className="flex gap-1 text-[11px]">
-        <label className="flex items-center gap-1">
-          Eq%
-          <input type="number" min={0} max={100} className="w-12 border border-gray-300 dark:border-gray-600 rounded px-1 bg-white dark:bg-gray-800"
-            value={acc.allocation.equity}
-            onChange={e => onUpdate({ allocation: { ...acc.allocation, equity: +e.target.value } })} />
-        </label>
-        <label className="flex items-center gap-1">
-          Bd%
-          <input type="number" min={0} max={100} className="w-12 border border-gray-300 dark:border-gray-600 rounded px-1 bg-white dark:bg-gray-800"
-            value={acc.allocation.bonds}
-            onChange={e => onUpdate({ allocation: { ...acc.allocation, bonds: +e.target.value } })} />
-        </label>
-      </div>
-    )
-  }
   if (acc.type === 'cash' || acc.type === 'loan') {
     return (
       <label className="flex items-center gap-1 text-[11px]">
@@ -133,7 +93,7 @@ function CharacteristicsEdit({ acc, onUpdate }: {
 
 // ─── Column layout ─────────────────────────────────────────────────────────────
 
-const COLS = 'grid-cols-[2fr_1fr_1fr_1.5fr_1fr_52px_44px]'
+const COLS = 'grid-cols-[2fr_1fr_1.5fr_1fr_52px]'
 
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
@@ -141,12 +101,34 @@ export default function Accounts() {
   const { lmApiKey, lmProxyUrl, accounts, setAccounts, upsertAccount } = useAppStore()
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
-  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editing, setEditing] = useState<Account | null>(null)
 
   useEffect(() => { if (lmApiKey) syncFromLM() }, []) // eslint-disable-line
-  const [sortKey, setSortKey] = useState<SortKey>('name')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const [filterType, setFilterType] = useState<Account['type'] | null>(null)
+  const { sort, toggle: handleSort } = useSort<SortKey>('name')
+  
+  const [filterTypes, setFilterTypesState] = useState<Set<Account['type']>>(() => {
+    try {
+      const saved = localStorage.getItem('dm_accounts_filter')
+      if (saved) return new Set(JSON.parse(saved))
+    } catch {}
+    return new Set()
+  })
+  function setFilterTypes(next: Set<Account['type']>) {
+    setFilterTypesState(next)
+    localStorage.setItem('dm_accounts_filter', JSON.stringify([...next]))
+  }
+
+  const [showExcluded, setShowExcludedState] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('dm_accounts_showExcluded')
+      if (saved) return JSON.parse(saved)
+    } catch {}
+    return true
+  })
+  function setShowExcluded(v: boolean) {
+    setShowExcludedState(v)
+    localStorage.setItem('dm_accounts_showExcluded', JSON.stringify(v))
+  }
 
   async function syncFromLM() {
     if (!lmApiKey) { setSyncError('No API key — configure it in Settings'); return }
@@ -202,6 +184,7 @@ export default function Accounts() {
           fxSplitEUR: ex.fxSplitEUR,
           fxSplitEURRef: ex.fxSplitEURRef,
           holdings: ex.holdings,
+          dividends: ex.dividends,
         }
       })
 
@@ -255,10 +238,6 @@ export default function Accounts() {
     }
   }
 
-  function handleSort(col: SortKey) {
-    if (sortKey === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortKey(col); setSortDir('asc') }
-  }
 
   async function syncSinglePlaid(accountId: number, accessToken: string) {
     if (!lmProxyUrl) return
@@ -286,15 +265,19 @@ export default function Accounts() {
     }
   }
 
-  const filtered = filterType ? accounts.filter(a => a.type === filterType) : accounts
+  const filtered = accounts.filter(a => {
+    if (filterTypes.size > 0 && !filterTypes.has(a.type)) return false
+    if (!showExcluded && a.includedInPlanning === false) return false
+    return true
+  })
   const sorted = [...filtered].sort((a, b) => {
     let av: string | number, bv: string | number
-    if (sortKey === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase() }
-    else if (sortKey === 'balance') { av = a.balance; bv = b.balance }
-    else if (sortKey === 'currency') { av = a.currency.toUpperCase(); bv = b.currency.toUpperCase() }
+    if (sort.key === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase() }
+    else if (sort.key === 'balance') { av = a.balance; bv = b.balance }
+    else if (sort.key === 'currency') { av = a.currency.toUpperCase(); bv = b.currency.toUpperCase() }
     else { av = a.type; bv = b.type }
-    if (av < bv) return sortDir === 'asc' ? -1 : 1
-    if (av > bv) return sortDir === 'asc' ? 1 : -1
+    if (av < bv) return sort.dir === 'asc' ? -1 : 1
+    if (av > bv) return sort.dir === 'asc' ? 1 : -1
     return 0
   })
 
@@ -323,46 +306,61 @@ export default function Accounts() {
         )}
         {syncError && <Banner variant="warning">⚠ {syncError}</Banner>}
 
-        {/* Type filter pills */}
+        {/* Filters */}
         {accounts.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {([null, 'investment', 'retirement', 'cash', 'loan', 'credit', 'real_estate', 'other'] as const).map(t => {
-              const count = t ? accounts.filter(a => a.type === t).length : accounts.length
-              if (count === 0) return null
-              const active = filterType === t
-              return (
-                <button
-                  key={t ?? 'all'}
-                  onClick={() => setFilterType(active ? null : t)}
-                  className={`text-[11px] px-2.5 py-[3px] rounded-full border transition-colors ${
-                    active
-                      ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 border-gray-900 dark:border-white font-medium'
-                      : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500'
-                  }`}
-                >
-                  {t ? TYPE_META[t].label : 'All'} <span className="opacity-50">{count}</span>
-                </button>
-              )
-            })}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap gap-1.5">
+              {(['investment', 'retirement', 'cash', 'loan', 'credit', 'real_estate', 'other'] as const).map(t => {
+                const count = accounts.filter(a => a.type === t).length
+                if (count === 0) return null
+                const active = filterTypes.has(t)
+                return (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      const next = new Set(filterTypes)
+                      if (next.has(t)) next.delete(t)
+                      else next.add(t)
+                      setFilterTypes(next)
+                    }}
+                    className={`text-[11px] px-2.5 py-[3px] rounded-full border transition-colors ${
+                      active
+                        ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 border-gray-900 dark:border-white font-medium'
+                        : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500'
+                    }`}
+                  >
+                    {TYPE_META[t].label} <span className="opacity-50">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+            
+            <label className="flex items-center gap-1.5 text-[11.5px] text-gray-600 dark:text-gray-400 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={showExcluded}
+                onChange={e => setShowExcluded(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              Show excluded
+            </label>
           </div>
         )}
 
         <Table>
           <TableHead>
             <div className={`grid ${COLS} gap-2 items-center`}>
-              <SortBtn col="name" label="Account" sortKey={sortKey} sortDir={sortDir} onClick={() => handleSort('name')} />
-              <SortBtn col="balance" label="Balance" sortKey={sortKey} sortDir={sortDir} onClick={() => handleSort('balance')} />
-              <SortBtn col="currency" label="Currency" sortKey={sortKey} sortDir={sortDir} onClick={() => handleSort('currency')} />
+              <SortBtn col="name" label="Account" sort={sort} onToggle={handleSort} />
+              <SortBtn col="balance" label="Balance" sort={sort} onToggle={handleSort} />
               <span>Characteristics</span>
-              <SortBtn col="type" label="Type" sortKey={sortKey} sortDir={sortDir} onClick={() => handleSort('type')} />
-              <span></span>
+              <SortBtn col="type" label="Type" sort={sort} onToggle={handleSort} />
               <span></span>
             </div>
           </TableHead>
           {sorted.map(acc => {
             const included = acc.includedInPlanning !== false
-            const isEditing = editingId === acc.id
-            const plaidEligible = ['investment', 'retirement', 'cash'].includes(acc.type)
+            const isEditing = editing?.id === acc.id
+            const eAcc = isEditing ? editing : acc
             return (
               <TableRow key={acc.id} dimmed={!included}>
                 {/* ── Main row ── */}
@@ -378,16 +376,12 @@ export default function Accounts() {
                   </span>
 
                   {/* Balance */}
-                  <span className={`font-medium ${acc.balance >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                    {acc.balance >= 0 ? '+' : ''}{formatCurrency(acc.balance, acc.currency)}
-                  </span>
-
-                  {/* Currency chip */}
-                  <span>
-                    <Badge variant={acc.currency.toUpperCase() === 'EUR' ? 'eur' : 'usd'}>
-                      {acc.currency.toUpperCase()}
-                    </Badge>
-                  </span>
+                  <div className="flex items-center justify-end gap-1">
+                    <span className={`font-medium tabular-nums ${acc.balance >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                      {acc.balance >= 0 ? '+' : '−'}{Math.abs(acc.balance).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    </span>
+                    <span className={`${CUR_BADGE} ${curBadgeClass(acc.currency)}`}>{curSymbol(acc.currency)}</span>
+                  </div>
 
                   {/* Characteristics (view only in main row) */}
                   <CharacteristicsView acc={acc} />
@@ -401,40 +395,34 @@ export default function Accounts() {
                   </span>
 
                   {/* Edit / Done */}
-                  <button
-                    className={`text-[11px] cursor-pointer transition-colors ${isEditing ? 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200' : 'text-blue-600 hover:text-blue-800 dark:hover:text-blue-400'}`}
-                    onClick={() => setEditingId(isEditing ? null : acc.id)}
-                  >
-                    {isEditing ? 'Done' : 'Edit'}
-                  </button>
-
-                  {/* Include toggle */}
-                  <button
-                    onClick={() => upsertAccount({ ...acc, includedInPlanning: !included })}
-                    title={included ? 'Included in planning — click to exclude' : 'Excluded — click to include'}
-                    className={`relative w-8 h-[17px] rounded-full transition-colors cursor-pointer shrink-0 ${
-                      included ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
-                    }`}
-                  >
-                    <span className={`absolute top-[2px] w-[13px] h-[13px] bg-white rounded-full shadow transition-all ${
-                      included ? 'left-[17px]' : 'left-[2px]'
-                    }`} />
-                  </button>
+                  <div className="flex justify-end">
+                    <button
+                      className="text-[11px] cursor-pointer transition-colors text-gray-400 hover:text-blue-500"
+                      onClick={() => setEditing(acc)}
+                    >
+                      <EditIcon />
+                    </button>
+                  </div>
                 </div>
 
                 {/* ── Edit panel (expands below row) ── */}
                 {isEditing && (
-                  <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/60 space-y-3">
-                    {/* Characteristics + type edit */}
+                  <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/60 space-y-4">
+                    {/* Top row: Inclusion, Type, Characteristics */}
                     <div className="flex items-center gap-4 flex-wrap">
-                      <CharacteristicsEdit acc={acc} onUpdate={patch => upsertAccount({ ...acc, ...patch })} />
+                      <label className="flex items-center gap-2 cursor-pointer text-[12px] font-medium text-gray-700 dark:text-gray-300">
+                        <input type="checkbox" checked={eAcc.includedInPlanning !== false} onChange={e => setEditing({ ...eAcc, includedInPlanning: e.target.checked })} className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+                        Include in planning & cash flow
+                      </label>
+                      
                       <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 shrink-0" />
+                      
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-gray-500">Type</span>
                         <select
                           className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800"
-                          value={acc.type}
-                          onChange={e => upsertAccount({ ...acc, type: e.target.value as Account['type'], typeOverridden: true })}
+                          value={eAcc.type}
+                          onChange={e => setEditing({ ...eAcc, type: e.target.value as Account['type'], typeOverridden: true })}
                         >
                           <option value="investment">Investment</option>
                           <option value="retirement">Retirement</option>
@@ -445,71 +433,111 @@ export default function Accounts() {
                           <option value="other">Other</option>
                         </select>
                       </div>
+
+                      {eAcc.type !== 'other' && eAcc.type !== 'real_estate' && eAcc.type !== 'investment' && eAcc.type !== 'retirement' && (
+                        <>
+                          <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 shrink-0" />
+                          <CharacteristicsEdit acc={eAcc} onUpdate={patch => setEditing({ ...eAcc, ...patch })} />
+                        </>
+                      )}
                     </div>
 
-                    {/* Multi-currency EUR split (e.g. IBKR consolidates EUR cash into CUR:USD) */}
-                    {acc.currency.toUpperCase() !== 'EUR' && (() => {
-                      const curUSDHolding = acc.holdings?.find(h => h.ticker === 'CUR:USD')
-                      const currentRef = curUSDHolding ? curUSDHolding.institutionValue : acc.balance
-                      const hasChanged = acc.fxSplitEUR != null && acc.fxSplitEUR > 0
-                        && acc.fxSplitEURRef != null
-                        && Math.abs(currentRef - acc.fxSplitEURRef) / Math.max(1, acc.fxSplitEURRef) > 0.01
-                      const eurInAccCurrency = acc.fxSplitEUR
-                        ? convertToBase(acc.fxSplitEUR, 'EUR', acc.currency as 'EUR' | 'USD', DEFAULT_EUR_USD_RATE)
-                        : 0
-                      return (
-                        <div className="flex flex-col gap-1.5 text-[11px]">
-                          <div className="flex items-center gap-2">
-                            <span className="text-gray-500">
-                              {curUSDHolding
-                                ? `EUR in CUR:USD (${formatCurrency(curUSDHolding.institutionValue, 'USD')} total)`
-                                : `EUR portion of ${acc.currency.toUpperCase()} balance`}
-                            </span>
-                            <NumericInput
-                              className="w-24 h-[26px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800 text-[11px]"
-                              placeholder="0"
-                              value={acc.fxSplitEUR ?? null}
-                              onChange={val => upsertAccount({ ...acc, fxSplitEUR: val, fxSplitEURRef: val != null ? currentRef : undefined })}
-                            />
-                            <span className="text-gray-400">EUR</span>
-                            {acc.fxSplitEUR != null && acc.fxSplitEUR > 0 && (
-                              <span className="text-gray-400">
-                                → {formatCurrency(acc.fxSplitEUR, 'EUR')} EUR
-                                · {formatCurrency(Math.max(0, acc.balance - eurInAccCurrency), acc.currency)} {acc.currency.toUpperCase()}
-                              </span>
+                    {/* Advanced configuration for Investment / Retirement */}
+                    {(eAcc.type === 'investment' || eAcc.type === 'retirement') && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Allocations */}
+                        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/50 dark:bg-gray-800/40">
+                          <div className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-[0.05em] mb-2 flex justify-between items-center">
+                            <span>Allocations</span>
+                          </div>
+                          
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px]">
+                            {!eAcc.plaidAccessToken ? (
+                              <>
+                                <div className="flex gap-4 items-center">
+                                  <label className="flex items-center gap-1.5">
+                                    Equity
+                                    <input type="number" min={0} max={100} className="w-12 h-[24px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800"
+                                      value={eAcc.allocation.equity}
+                                      onChange={e => setEditing({ ...eAcc, allocation: { ...eAcc.allocation, equity: +e.target.value } })} />
+                                    %
+                                  </label>
+                                  <label className="flex items-center gap-1.5">
+                                    Bonds
+                                    <input type="number" min={0} max={100} className="w-12 h-[24px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800"
+                                      value={eAcc.allocation.bonds}
+                                      onChange={e => setEditing({ ...eAcc, allocation: { ...eAcc.allocation, bonds: +e.target.value } })} />
+                                    %
+                                  </label>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-gray-500">or sync automatically with Plaid</span>
+                                  <PlaidConnect
+                                    accountId={eAcc.id}
+                                    isLinked={!!eAcc.plaidAccessToken}
+                                    holdingsCount={eAcc.holdings?.length}
+                                    onLinked={async (token, itemId) => {
+                                      setEditing({ ...eAcc, plaidAccessToken: token, plaidItemId: itemId })
+                                    }}
+                                    onUnlink={() => setEditing({ ...eAcc, plaidAccessToken: undefined, plaidItemId: undefined, holdings: undefined })}
+                                    onRefresh={undefined}
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="text-[11px] text-gray-400 dark:text-gray-500 italic">
+                                  Auto-computed from Plaid holdings
+                                </div>
+                                <PlaidConnect
+                                  accountId={eAcc.id}
+                                  isLinked={!!eAcc.plaidAccessToken}
+                                  holdingsCount={eAcc.holdings?.length}
+                                  onLinked={async (token, itemId) => {
+                                    setEditing({ ...eAcc, plaidAccessToken: token, plaidItemId: itemId })
+                                  }}
+                                  onUnlink={() => setEditing({ ...eAcc, plaidAccessToken: undefined, plaidItemId: undefined, holdings: undefined })}
+                                  onRefresh={eAcc.plaidAccessToken ? () => syncSinglePlaid(eAcc.id, eAcc.plaidAccessToken!) : undefined}
+                                />
+                              </>
                             )}
                           </div>
-                          {hasChanged && (
-                            <div className="text-amber-600 dark:text-amber-400 text-[10.5px]">
-                              ⚠ CUR:USD position changed ({formatCurrency(acc.fxSplitEURRef!, 'USD')} → {formatCurrency(currentRef, 'USD')}) — verify the EUR amount is still accurate
-                            </div>
-                          )}
-                          {(!acc.fxSplitEUR || acc.fxSplitEUR === 0) && (
-                            <span className="text-gray-400 text-[10px] italic">Set to split currency exposure for multi-currency accounts</span>
-                          )}
                         </div>
-                      )
-                    })()}
 
-                    {/* Plaid section */}
-                    {plaidEligible && (
-                      <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-3 py-2.5 bg-gray-50/50 dark:bg-gray-800/40">
-                        <div className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-[0.05em] mb-2">
-                          Holdings sync
-                        </div>
-                        <PlaidConnect
-                          accountId={acc.id}
-                          isLinked={!!acc.plaidAccessToken}
-                          holdingsCount={acc.holdings?.length}
-                          onLinked={async (token, itemId) => {
-                            upsertAccount({ ...acc, plaidAccessToken: token, plaidItemId: itemId })
-                            await syncSinglePlaid(acc.id, token)
-                          }}
-                          onUnlink={() => upsertAccount({ ...acc, plaidAccessToken: undefined, plaidItemId: undefined, holdings: undefined })}
-                          onRefresh={acc.plaidAccessToken ? () => syncSinglePlaid(acc.id, acc.plaidAccessToken!) : undefined}
-                        />
+                        {/* Multi-currency split */}
+                        {eAcc.currency.toUpperCase() !== 'EUR' && (() => {
+                          const curUSDHolding = eAcc.holdings?.find(h => h.ticker === 'CUR:USD')
+                          const currentRef = curUSDHolding ? curUSDHolding.institutionValue : eAcc.balance
+                          const hasChanged = eAcc.fxSplitEUR != null && eAcc.fxSplitEUR > 0
+                            && eAcc.fxSplitEURRef != null
+                            && Math.abs(currentRef - eAcc.fxSplitEURRef) / Math.max(1, eAcc.fxSplitEURRef) > 0.01
+                          return (
+                            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50/50 dark:bg-gray-800/40 flex flex-col justify-center">
+                              <div className="flex items-center gap-2 text-[11px] flex-wrap">
+                                <span className="text-gray-700 dark:text-gray-300">EUR portion of USD position:</span>
+                                <NumericInput
+                                  className="w-24 h-[24px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800 text-[11px]"
+                                  placeholder="0"
+                                  value={eAcc.fxSplitEUR ?? null}
+                                  onChange={val => setEditing({ ...eAcc, fxSplitEUR: val, fxSplitEURRef: val != null ? currentRef : undefined })}
+                                />
+                                <span className="text-gray-500 italic">(useful when the provider consolidates all the cash in USD)</span>
+                              </div>
+                              {hasChanged && (
+                                <div className="mt-2 text-amber-600 dark:text-amber-400 text-[10.5px]">
+                                  ⚠ CUR:USD position changed ({formatCurrency(eAcc.fxSplitEURRef!, 'USD')} → {formatCurrency(currentRef, 'USD')}) — verify the EUR amount is still accurate
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </div>
                     )}
+                    
+                    <div className="flex gap-2 justify-start mt-2">
+                      <button className="text-[11.5px] px-3 py-1 border border-gray-300 rounded-[5px] hover:bg-gray-50 dark:hover:bg-gray-800" onClick={() => setEditing(null)}>Cancel</button>
+                      <button className="text-[11.5px] px-3 py-1 bg-green-50 border border-green-300 text-green-700 rounded-[5px] hover:bg-green-100" onClick={() => { upsertAccount(editing); setEditing(null) }}>Save</button>
+                    </div>
                   </div>
                 )}
               </TableRow>

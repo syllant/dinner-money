@@ -251,13 +251,46 @@ export function buildCashProjection({
     ]
     for (const p of pensions) {
       if (!affectsCash(p.targetAccountId, accounts)) continue
-      const personBY = p.person === 'self' ? profile.birthYear : profile.spouseBirthYear
-      if (personBY + p.startAge <= y) {
-        const amt = toEUR(p.monthlyAmount, p.currency)
-        monthlyIncome += amt
-        const srcLabel = p.source === 'US_SS' ? 'Soc. Security' : p.source === 'FR_RETRAITE' ? 'Retraite' : 'Pension'
-        const personLabel = p.person === 'self' ? 'Self' : 'Spouse'
-        recurringIncomeItems.push({ category: srcLabel, name: `${p.label} (${personLabel})`, amountEUR: amt, currency: p.currency.toUpperCase(), amountNative: p.monthlyAmount })
+      
+      const [stY, stM] = p.startDate.split('-').map(Number)
+      const afterStart = y > stY || (y === stY && m >= stM)
+      
+      let beforeEnd = true
+      if (p.endDate) {
+        const [enY, enM] = p.endDate.split('-').map(Number)
+        beforeEnd = y < enY || (y === enY && m <= enM)
+      }
+
+      if (!afterStart || !beforeEnd) continue
+
+      const amtEUR = toEUR(p.amount, p.currency)
+      const srcLabel = p.source === 'US_SS' ? 'Soc. Security' : p.source === 'FR_RETRAITE' ? 'Retraite' : 'Pension'
+      const personLabel = p.person === 'self' ? 'Self' : 'Spouse'
+      const nameLabel = `${p.label} (${personLabel})`
+
+      if (p.frequency === 'yearly' || p.frequency === 'one_time') {
+        if (m !== stM) continue // only trigger on anniversary month
+        if (p.frequency === 'one_time' && y !== stY) continue
+        
+        events.push({
+          label: nameLabel,
+          type: 'other',
+          category: srcLabel,
+          amountEUR: amtEUR,
+          currency: p.currency,
+          amountNative: p.amount,
+          bypassesCash: false,
+        })
+      } else {
+        // Monthly
+        monthlyIncome += amtEUR
+        recurringIncomeItems.push({
+          category: srcLabel,
+          name: nameLabel,
+          amountEUR: amtEUR,
+          currency: p.currency.toUpperCase(),
+          amountNative: p.amount
+        })
       }
     }
 
@@ -287,22 +320,49 @@ export function buildCashProjection({
       })
     }
 
-    // Windfalls
+    // Windfalls (income)
     for (const wf of windfalls) {
-      const { year: wfYear, month: wfMonth } = parseYearMonth(wf.date)
-      if (wfYear !== y || wfMonth !== m) continue
+      const freq = wf.frequency ?? 'one_time'
       const bypasses = !affectsCash(wf.targetAccountId, accounts)
       const targetAcc = wf.targetAccountId != null ? accounts.find(a => a.id === wf.targetAccountId) : undefined
-      events.push({
-        label: wf.name,
-        type: 'windfall',
-        category: wf.category || 'Income',
-        amountEUR: bypasses ? 0 : toEUR(wf.amount, wf.currency),
-        currency: wf.currency,
-        amountNative: wf.amount,
-        accountNote: targetAcc ? `→ ${targetAcc.name}` : undefined,
-        bypassesCash: bypasses,
-      })
+      const accountNote = targetAcc ? `→ ${targetAcc.name}` : undefined
+      const cat = wf.category || 'Income'
+      const amtEUR = toEUR(wf.amount, wf.currency)
+
+      if (freq === 'monthly') {
+        // Recurring monthly income: add to recurring income items
+        const { year: sY, month: sM } = parseYearMonth(wf.date)
+        const endY = wf.endDate ? parseInt(wf.endDate.split('-')[0]) : null
+        const endM = wf.endDate ? parseInt(wf.endDate.split('-')[1] ?? '12') : null
+        const afterStart = y > sY || (y === sY && m >= sM)
+        const beforeEnd = endY === null || y < endY || (y === endY && m <= (endM ?? 12))
+        if (afterStart && beforeEnd && !bypasses) {
+          monthlyIncome += amtEUR
+          recurringIncomeItems.push({ category: cat, name: wf.name, amountEUR: amtEUR, currency: wf.currency.toUpperCase(), amountNative: wf.amount })
+        }
+      } else if (freq === 'yearly') {
+        const { year: sY, month: sM } = parseYearMonth(wf.date)
+        const endY = wf.endDate ? parseInt(wf.endDate.split('-')[0]) : null
+        const endM = wf.endDate ? parseInt(wf.endDate.split('-')[1] ?? '12') : null
+        const afterStart = y > sY || (y === sY && m >= sM)
+        const beforeEnd = endY === null || y < endY || (y === endY && m <= (endM ?? 12))
+        if (afterStart && beforeEnd && m === sM) {
+          events.push({
+            label: wf.name, type: 'windfall', category: cat,
+            amountEUR: bypasses ? 0 : amtEUR, currency: wf.currency,
+            amountNative: wf.amount, accountNote, bypassesCash: bypasses,
+          })
+        }
+      } else {
+        // one_time
+        const { year: wfYear, month: wfMonth } = parseYearMonth(wf.date)
+        if (wfYear !== y || wfMonth !== m) continue
+        events.push({
+          label: wf.name, type: 'windfall', category: cat,
+          amountEUR: bypasses ? 0 : amtEUR, currency: wf.currency,
+          amountNative: wf.amount, accountNote, bypassesCash: bypasses,
+        })
+      }
     }
 
     // One-time and custom installment expenses
