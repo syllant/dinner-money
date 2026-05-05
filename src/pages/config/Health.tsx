@@ -4,6 +4,7 @@ import { PageHeader } from '../../components/ui/PageHeader'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
 import { Badge } from '../../components/ui/Badge'
 import { formatCurrency, generateId } from '../../lib/format'
+import { confirmDelete } from '../../lib/confirm'
 import type { MedicalCoverage, MedicalExpense } from '../../types'
 
 // ─── Medical Coverage ─────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ function CoverageSection() {
               </span>
               <div className="flex gap-2">
                 <button className="text-[11px] text-blue-600 hover:underline" onClick={() => setEditing(c)}>Edit</button>
-                <button className="text-[11px] text-red-500 hover:underline" onClick={() => deleteMedicalCoverage(c.id)}>Del</button>
+                <button className="text-[11px] text-red-500 hover:underline" onClick={() => { if (confirmDelete(c.name || 'this coverage')) deleteMedicalCoverage(c.id) }}>Del</button>
               </div>
             </div>
           </TableRow>
@@ -243,7 +244,7 @@ function MedicalExpenseSection() {
               </span>
               <div className="flex gap-2">
                 <button className="text-[11px] text-blue-600 hover:underline" onClick={() => setEditing(e)}>Edit</button>
-                <button className="text-[11px] text-red-500 hover:underline" onClick={() => deleteMedicalExpense(e.id)}>Del</button>
+                <button className="text-[11px] text-red-500 hover:underline" onClick={() => { if (confirmDelete(e.name || 'this expense')) deleteMedicalExpense(e.id) }}>Del</button>
               </div>
             </div>
           </TableRow>

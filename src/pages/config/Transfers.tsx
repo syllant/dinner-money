@@ -7,6 +7,7 @@ import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect
 import { NumericInput } from '../../components/ui/NumericInput'
 import { RecurringIcon, OneTimeIcon, CUR_BADGE, curBadgeClass, curSymbol } from '../../components/ui/FrequencyDisplay'
 import { generateId } from '../../lib/format'
+import { confirmDelete } from '../../lib/confirm'
 import type { Transfer, TransferFrequency } from '../../types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -334,7 +335,7 @@ export default function Transfers() {
               editing={editing}
               setEditing={setEditing}
               onDuplicate={() => duplicate(t)}
-              onDelete={() => deleteTransfer(t.id)}
+              onDelete={() => { if (confirmDelete(t.name || 'this transfer')) deleteTransfer(t.id) }}
               onSave={save}
             />
           ))}

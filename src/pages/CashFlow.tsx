@@ -8,7 +8,7 @@ import { formatCurrency, formatCompact } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
 import { buildCashProjection } from '../lib/cashProjection'
 import { projectedAnnualDividendsEUR } from '../lib/dividends'
-import { projectDividends } from '../lib/alphavantage'
+import { projectDividends } from '../lib/tiingo'
 import type { ProjectedMonth, CashEvent } from '../lib/cashProjection'
 import type { Account } from '../types'
 
@@ -30,7 +30,7 @@ function currencySymbol(cur: string): string {
 
 function computeAnnualDivEUR(
   accounts: Account[],
-  dividendHistory: Record<string, import('../lib/alphavantage').TickerDividend[]>,
+  dividendHistory: Record<string, import('../lib/tiingo').TickerDividend[]>,
 ): number {
   const invAccounts = accounts.filter(
     a => (a.type === 'investment' || a.type === 'retirement') && a.includedInPlanning !== false
@@ -41,22 +41,22 @@ function computeAnnualDivEUR(
   yearLater.setFullYear(yearLater.getFullYear() + 1)
   const yearLaterStr = yearLater.toISOString().slice(0, 10)
 
-  let avTotal = 0
-  let hasAV = false
+  let tiingoTotal = 0
+  let hasTiingo = false
   for (const acc of invAccounts) {
     for (const h of acc.holdings ?? []) {
       if (!h.ticker || /^CUR:/.test(h.ticker)) continue
       const hist = dividendHistory[h.ticker]
       if (!hist?.length) continue
-      hasAV = true
+      hasTiingo = true
       const projected = projectDividends(h.ticker, hist, h.quantity, 13)
         .filter(d => d.paymentDate >= todayStr && d.paymentDate <= yearLaterStr)
       for (const d of projected) {
-        avTotal += convertToBase(d.totalAmount, h.currency, 'EUR', DEFAULT_EUR_USD_RATE)
+        tiingoTotal += convertToBase(d.totalAmount, h.currency, 'EUR', DEFAULT_EUR_USD_RATE)
       }
     }
   }
-  return hasAV && avTotal > 0 ? avTotal : projectedAnnualDividendsEUR(invAccounts, DEFAULT_EUR_USD_RATE)
+  return hasTiingo && tiingoTotal > 0 ? tiingoTotal : projectedAnnualDividendsEUR(invAccounts, DEFAULT_EUR_USD_RATE)
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ function VerticalBalanceChart({ rows, slotCounts }: {
     ? HEADER_H + Math.max(0, Math.min(totalH - 200, bandStarts[hoveredIdx] + slotCounts[hoveredIdx] * ROW_H / 2 - 80))
     : 0
 
-  const axisLabel = (v: number, anchor: string, y: number) => (
+  const axisLabel = (v: number, anchor: 'start' | 'middle' | 'end', y: number) => (
     <text x={xScale(v)} y={y} textAnchor={anchor} fill="#d1d5db" fontSize="7.5">{formatK(Math.round(v))}</text>
   )
 
@@ -676,7 +676,7 @@ function AnnualBudgetSection({ projection, months, sidebar }: {
     <div className="pt-4 mt-4 border-t border-gray-100 dark:border-gray-800">
       <div className="flex justify-center mb-4">
         <div className="inline-flex items-stretch gap-0 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden bg-gray-50 dark:bg-gray-800/50 divide-x divide-gray-200 dark:divide-gray-700">
-          {summaryRows.map(({ label, entry, sign, colorCls }) => (
+          {summaryRows.map(({ label, entry, sign }) => (
             <div key={label} className="flex items-center gap-3 px-4 py-2.5">
               <span className="text-[10.5px] font-medium text-gray-500 dark:text-gray-400 shrink-0">{label}</span>
               <CurrencyAmounts entry={entry} isIncome={sign === '+'} />

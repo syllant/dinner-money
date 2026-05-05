@@ -5,6 +5,7 @@ import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Tab
 import { SortBtn, useSort } from '../../components/ui/SortBtn'
 import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect'
 import { formatCurrency, generateId } from '../../lib/format'
+import { confirmDelete } from '../../lib/confirm'
 import { NumericInput } from '../../components/ui/NumericInput'
 import {
   periodLabel, getFrequencyDisplay,
@@ -150,7 +151,7 @@ function InstallmentsEditor({
             <span className="text-[11px] text-gray-400">{currency}</span>
             <button
               className="text-[11px] text-red-400 hover:text-red-600"
-              onClick={() => remove(idx)}
+              onClick={() => { if (confirmDelete('this installment')) remove(idx) }}
               type="button"
             >×</button>
           </div>
@@ -393,6 +394,7 @@ export default function Expenses() {
   }
 
   function deleteItem(item: UnifiedExpense) {
+    if (!confirmDelete(item.name || 'this expense')) return
     if (item.source === 'coverage') deleteMedicalCoverage(item.id)
     else if (item.source === 'medical') deleteMedicalExpense(item.id)
     else deleteExpense(item.id)

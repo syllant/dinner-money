@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
-import { Badge } from '../../components/ui/Badge'
 import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect'
-import { formatCurrency, generateId } from '../../lib/format'
+import { generateId } from '../../lib/format'
+import { confirmDelete } from '../../lib/confirm'
 import type { RealEstateEvent } from '../../types'
 
 const TYPE_LABELS = { sell: '🏠 Sell', buy: '🏡 Buy', rent: '🔑 Rent' }
@@ -32,8 +32,10 @@ function RealEstateRow({
   onSave: () => void;
   onDelete: () => void;
 }) {
-  const accountId = e.eventType === 'sell' ? e.targetAccountId : e.sourceAccountId
-  const accountName = useAccountName(accountId)
+  const flowAccountId = e.eventType === 'sell' ? e.targetAccountId : e.sourceAccountId
+  const flowAccountName = useAccountName(flowAccountId)
+  const propertyAccountName = useAccountName(e.sourceRealEstateAccountId)
+  const mortgageAccountName = useAccountName(e.sourceMortgageAccountId)
   const arrow = e.eventType === 'sell' ? '→' : '←'
   const isEditing = editing?.id === e.id
   
@@ -52,7 +54,9 @@ function RealEstateRow({
         </div>
         <span className="truncate">{TYPE_LABELS[e.eventType]}</span>
         <span className="text-[10.5px] text-gray-400 truncate">
-          {accountName ? `${arrow} ${accountName}` : '—'}
+          {e.eventType === 'sell' && propertyAccountName ? `${propertyAccountName} · ` : ''}
+          {flowAccountName ? `${arrow} ${flowAccountName}` : '—'}
+          {e.eventType === 'sell' && mortgageAccountName ? ` · closes ${mortgageAccountName}` : ''}
         </span>
         <div className="flex gap-2">
           <button className="text-gray-400 hover:text-blue-500" onClick={() => setEditing(e)}><EditIcon /></button>
@@ -88,23 +92,44 @@ function RealEstateRow({
                 <option value="USD">USD</option><option value="EUR">EUR</option>
               </select>
             </div>
-            {editing.eventType === 'sell'
-              ? <AccountSelect
-                  label="Proceeds deposited to"
-                  placeholder="Cash (unspecified)"
-                  currency={editing.currency}
-                  value={editing.targetAccountId}
-                  onChange={id => setEditing({ ...editing, targetAccountId: id })}
+            {editing.eventType === 'sell' ? (
+              <div className="grid grid-cols-2 gap-3">
+                <AccountSelect
+                  label="Property account"
+                  placeholder="Select real estate"
+                  allowedTypes={['real_estate']}
+                  value={editing.sourceRealEstateAccountId}
+                  onChange={id => setEditing({ ...editing, sourceRealEstateAccountId: id })}
                 />
-              : <AccountSelect
-                  label="Payment funded by"
-                  placeholder="Cash (unspecified)"
-                  currency={editing.currency}
-                  value={editing.sourceAccountId}
-                  onChange={id => setEditing({ ...editing, sourceAccountId: id })}
-                />
-            }
+                <AccountSelect
+                    label="Proceeds deposited to"
+                    placeholder="Cash (unspecified)"
+                    currency={editing.currency}
+                    value={editing.targetAccountId}
+                    onChange={id => setEditing({ ...editing, targetAccountId: id })}
+                  />
+              </div>
+            ) : (
+              <AccountSelect
+                label="Payment funded by"
+                placeholder="Cash (unspecified)"
+                currency={editing.currency}
+                value={editing.sourceAccountId}
+                onChange={id => setEditing({ ...editing, sourceAccountId: id })}
+              />
+            )}
           </div>
+          {editing.eventType === 'sell' && (
+            <div className="grid grid-cols-[250px] gap-3 mt-3">
+              <AccountSelect
+                label="Associated mortgage account"
+                placeholder="None"
+                allowedTypes={['loan']}
+                value={editing.sourceMortgageAccountId}
+                onChange={id => setEditing({ ...editing, sourceMortgageAccountId: id })}
+              />
+            </div>
+          )}
           {/* Row 3: Frequency + Dates */}
           <div className="grid grid-cols-[120px_140px_140px] gap-3 mt-3">
             <div className="flex flex-col gap-1">
@@ -176,23 +201,44 @@ export default function RealEstate() {
                   <option value="USD">USD</option><option value="EUR">EUR</option>
                 </select>
               </div>
-              {editing.eventType === 'sell'
-                ? <AccountSelect
-                    label="Proceeds deposited to"
-                    placeholder="Cash (unspecified)"
-                    currency={editing.currency}
-                    value={editing.targetAccountId}
-                    onChange={id => setEditing({ ...editing, targetAccountId: id })}
+              {editing.eventType === 'sell' ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <AccountSelect
+                    label="Property account"
+                    placeholder="Select real estate"
+                    allowedTypes={['real_estate']}
+                    value={editing.sourceRealEstateAccountId}
+                    onChange={id => setEditing({ ...editing, sourceRealEstateAccountId: id })}
                   />
-                : <AccountSelect
-                    label="Payment funded by"
-                    placeholder="Cash (unspecified)"
-                    currency={editing.currency}
-                    value={editing.sourceAccountId}
-                    onChange={id => setEditing({ ...editing, sourceAccountId: id })}
-                  />
-              }
+                  <AccountSelect
+                      label="Proceeds deposited to"
+                      placeholder="Cash (unspecified)"
+                      currency={editing.currency}
+                      value={editing.targetAccountId}
+                      onChange={id => setEditing({ ...editing, targetAccountId: id })}
+                    />
+                </div>
+              ) : (
+                <AccountSelect
+                  label="Payment funded by"
+                  placeholder="Cash (unspecified)"
+                  currency={editing.currency}
+                  value={editing.sourceAccountId}
+                  onChange={id => setEditing({ ...editing, sourceAccountId: id })}
+                />
+              )}
             </div>
+            {editing.eventType === 'sell' && (
+              <div className="grid grid-cols-[250px] gap-3 mt-3">
+                <AccountSelect
+                  label="Associated mortgage account"
+                  placeholder="None"
+                  allowedTypes={['loan']}
+                  value={editing.sourceMortgageAccountId}
+                  onChange={id => setEditing({ ...editing, sourceMortgageAccountId: id })}
+                />
+              </div>
+            )}
             {/* Row 3: Frequency + Dates */}
             <div className="grid grid-cols-[120px_140px_140px] gap-3 mt-3">
               <div className="flex flex-col gap-1">
@@ -243,7 +289,7 @@ export default function RealEstate() {
               editing={editing}
               setEditing={setEditing}
               onSave={() => { upsertRealEstateEvent(editing!); setEditing(null) }}
-              onDelete={() => deleteRealEstateEvent(e.id)}
+              onDelete={() => { if (confirmDelete(e.notes || TYPE_LABELS[e.eventType])) deleteRealEstateEvent(e.id) }}
             />
           ))}
           <TableAddRow onClick={() => setEditing(blank())}>+ Add event</TableAddRow>

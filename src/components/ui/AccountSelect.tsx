@@ -44,6 +44,7 @@ export function AccountSelect({
   const selected = value != null ? accounts.find(a => a.id === value) : undefined
 
   const options = accounts
+    .filter(a => a.includedInPlanning !== false)
     .filter(a => allowedTypes.includes(a.type))
     .filter(a => !currency || a.currency.toUpperCase() === currency.toUpperCase())
     .filter(a => !query || a.name.toLowerCase().includes(query.toLowerCase()))
@@ -114,5 +115,6 @@ export function AccountSelect({
 export function useAccountName(id: number | undefined): string | undefined {
   const accounts = useAppStore(s => s.accounts)
   if (id == null) return undefined
-  return accounts.find(a => a.id === id)?.name
+  const account = accounts.find(a => a.id === id && a.includedInPlanning !== false)
+  return account?.name
 }

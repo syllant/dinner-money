@@ -4,6 +4,7 @@ import { PageHeader } from '../../components/ui/PageHeader'
 import { Table, TableHead, TableRow, TableAddRow } from '../../components/ui/Table'
 import { Badge } from '../../components/ui/Badge'
 import { generateId } from '../../lib/format'
+import { confirmDelete } from '../../lib/confirm'
 import type { ResidencyPeriod } from '../../types'
 
 const blankPeriod = (): ResidencyPeriod => ({
@@ -25,6 +26,7 @@ export default function Profile() {
   }
 
   function deletePeriod(id: string) {
+    if (!confirmDelete('this residency period')) return
     setProfile({ residencyPeriods: profile.residencyPeriods.filter(r => r.id !== id) })
   }
 
@@ -38,7 +40,8 @@ export default function Profile() {
             {[
               { label: 'Your birth year', key: 'birthYear' as const },
               { label: 'Spouse birth year', key: 'spouseBirthYear' as const },
-              { label: 'Projection end age', key: 'projectionEndAge' as const },
+              { label: 'Your longevity age', key: 'projectionEndAge' as const },
+              { label: 'Spouse longevity age', key: 'spouseProjectionEndAge' as const },
             ].map(({ label, key }) => (
               <div key={key} className="flex flex-col gap-1">
                 <label className="text-[11px] text-gray-500 dark:text-gray-400">{label}</label>
@@ -50,17 +53,6 @@ export default function Profile() {
                 />
               </div>
             ))}
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-gray-500 dark:text-gray-400">Base currency</label>
-              <select
-                className="h-[32px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12.5px] bg-white dark:bg-gray-800"
-                value={profile.baseCurrency}
-                onChange={e => setProfile({ baseCurrency: e.target.value as 'EUR' | 'USD' })}
-              >
-                <option value="EUR">EUR</option>
-                <option value="USD">USD</option>
-              </select>
-            </div>
           </div>
         </section>
 

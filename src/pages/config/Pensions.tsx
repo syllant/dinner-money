@@ -7,6 +7,7 @@ import { AccountSelect, useAccountName } from '../../components/ui/AccountSelect
 import { NumericInput } from '../../components/ui/NumericInput'
 import { RecurringIcon, OneTimeIcon, CUR_BADGE, curBadgeClass, curSymbol } from '../../components/ui/FrequencyDisplay'
 import { generateId } from '../../lib/format'
+import { confirmDelete } from '../../lib/confirm'
 import type { PensionEstimate, PensionSource, ExpenseFrequency } from '../../types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -342,7 +343,7 @@ export default function Pensions() {
               editing={editing}
               setEditing={setEditing}
               onSave={save}
-              onDelete={() => deletePension(p.id)}
+              onDelete={() => { if (confirmDelete(p.label)) deletePension(p.id) }}
             />
           ))}
           <TableAddRow onClick={() => setEditing(defaultPension('US_SS'))}>+ Add pension source</TableAddRow>

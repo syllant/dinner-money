@@ -6,17 +6,42 @@ interface NumericInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElem
   decimals?: number
 }
 
-/** Format a raw digit string with thousands commas (and optional decimal places). */
-function applyCommas(str: string, decimals: number): string {
-  const clean = decimals > 0
-    ? str.replace(/[^\d.]/g, '')
-    : str.replace(/\D/g, '')
+const locale = typeof navigator !== 'undefined' ? navigator.language : 'en-US'
+const parts = new Intl.NumberFormat(locale).formatToParts(12345.6)
+const groupSep = parts.find(part => part.type === 'group')?.value ?? ','
+const decimalSep = parts.find(part => part.type === 'decimal')?.value ?? '.'
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function normalizeInput(str: string, decimals: number): string {
+  let clean = str
+    .replace(new RegExp(escapeRegExp(groupSep), 'g'), '')
+    .replace(/\s/g, '')
+  if (decimalSep !== '.') clean = clean.replace(new RegExp(escapeRegExp(decimalSep), 'g'), '.')
+
+  clean = decimals > 0
+    ? clean.replace(/[^\d.]/g, '')
+    : clean.replace(/\D/g, '')
+
+  if (decimals <= 0) return clean
+  const firstDecimal = clean.indexOf('.')
+  if (firstDecimal < 0) return clean
+  const intPart = clean.slice(0, firstDecimal)
+  const decPart = clean.slice(firstDecimal + 1).replace(/\./g, '')
+  return `${intPart}.${decPart}`
+}
+
+/** Format a raw digit string with locale grouping and optional decimal places. */
+function applySeparators(str: string, decimals: number): string {
+  const clean = normalizeInput(str, decimals)
   if (decimals > 0) {
     const [intPart = '', decPart = ''] = clean.split('.')
-    const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-    return clean.includes('.') ? `${formattedInt}.${decPart.slice(0, decimals)}` : formattedInt
+    const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, groupSep)
+    return clean.includes('.') ? `${formattedInt}${decimalSep}${decPart.slice(0, decimals)}` : formattedInt
   }
-  return clean.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return clean.replace(/\B(?=(\d{3})+(?!\d))/g, groupSep)
 }
 
 export function NumericInput({ value, onChange, decimals = 0, className, placeholder, ...rest }: NumericInputProps) {
@@ -26,16 +51,16 @@ export function NumericInput({ value, onChange, decimals = 0, className, placeho
 
   const displayValue = editStr !== null
     ? editStr
-    : value != null ? applyCommas(String(Math.round(value)), decimals) : ''
+    : value != null ? applySeparators(decimals > 0 ? String(value) : String(Math.round(value)), decimals) : ''
 
   function handleFocus() {
-    const initial = value != null ? applyCommas(String(value), decimals) : ''
+    const initial = value != null ? applySeparators(String(value), decimals) : ''
     setEditStr(initial)
     setTimeout(() => ref.current?.select(), 0)
   }
 
   function handleBlur() {
-    const raw = (editStr ?? '').replace(/,/g, '')
+    const raw = normalizeInput(editStr ?? '', decimals)
     const n = decimals > 0 ? parseFloat(raw) : parseInt(raw, 10)
     onChange(isNaN(n) ? undefined : n)
     setEditStr(null)
@@ -48,7 +73,7 @@ export function NumericInput({ value, onChange, decimals = 0, className, placeho
     // Count how many digit characters appear before the cursor
     const digitsBeforeCursor = inputVal.slice(0, cursorPos).replace(/\D/g, '').length
 
-    const formatted = applyCommas(inputVal, decimals)
+    const formatted = applySeparators(inputVal, decimals)
     setEditStr(formatted)
 
     // Restore cursor: find position in formatted string where that many digits have passed
@@ -68,7 +93,7 @@ export function NumericInput({ value, onChange, decimals = 0, className, placeho
     <input
       ref={ref}
       type="text"
-      inputMode="numeric"
+      inputMode={decimals > 0 ? 'decimal' : 'numeric'}
       value={displayValue}
       placeholder={placeholder}
       onFocus={handleFocus}

@@ -10,21 +10,59 @@ import {
   CUR_BADGE, curBadgeClass, curSymbol,
 } from '../../components/ui/FrequencyDisplay'
 import { generateId } from '../../lib/format'
-import type { Windfall, TaxTreatment, ExpenseFrequency } from '../../types'
+import { confirmDelete } from '../../lib/confirm'
+import type { Windfall, TaxTreatment, ExpenseFrequency, RealizedGainLot, TaxLot } from '../../types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TAX_LABELS: Record<TaxTreatment, string> = {
-  CAPITAL_GAINS_LT: 'LT cap. gains',
-  CAPITAL_GAINS_ST: 'ST cap. gains',
+  CAPITAL_GAINS_LT: 'Capital gains',
+  CAPITAL_GAINS_ST: 'Capital gains',
   ORDINARY_INCOME: 'Ordinary income',
   TAX_FREE: 'Tax-free',
 }
+
+const TAX_OPTIONS: Array<{ value: TaxTreatment; label: string }> = [
+  { value: 'ORDINARY_INCOME', label: 'Ordinary income' },
+  { value: 'CAPITAL_GAINS_LT', label: 'Capital gains' },
+  { value: 'TAX_FREE', label: 'Tax-free' },
+]
 
 const INCOME_CATEGORIES = [
   'Bonus', 'Gift', 'Inheritance', 'Insurance', 'Other income',
   'Property sale', 'Rental income', 'Salary', 'Stock sale',
 ]
+
+function isCapitalGainTreatment(treatment: TaxTreatment): boolean {
+  return treatment === 'CAPITAL_GAINS_LT' || treatment === 'CAPITAL_GAINS_ST'
+}
+
+function realizedGainLotsTotal(lots: RealizedGainLot[] | undefined): number {
+  return (lots ?? []).reduce((sum, lot) => sum + Math.max(0, lot.proceeds - lot.costBasis), 0)
+}
+
+function holdingPeriodLabel(lot: RealizedGainLot, saleMonth: string, fallback: TaxTreatment): string {
+  if (!lot.acquiredDate) return TAX_LABELS[fallback]
+  const acquired = new Date(lot.acquiredDate)
+  const sold = new Date(`${saleMonth.slice(0, 7)}-01`)
+  if (Number.isNaN(acquired.getTime()) || Number.isNaN(sold.getTime())) return TAX_LABELS[fallback]
+  return sold.getTime() - acquired.getTime() > 365 * 24 * 60 * 60 * 1000 ? 'LT cap. gains' : 'ST cap. gains'
+}
+
+function realizedLotsFromAccountLots(taxLots: TaxLot[] | undefined, saleAmount: number, currency: 'USD' | 'EUR'): RealizedGainLot[] {
+  const lots = (taxLots ?? []).filter(lot => lot.marketValue > 0)
+  const totalValue = lots.reduce((sum, lot) => sum + lot.marketValue, 0)
+  if (lots.length === 0 || totalValue <= 0 || saleAmount <= 0) return []
+  const scale = Math.min(1, saleAmount / totalValue)
+  return lots.map(lot => ({
+    id: generateId(),
+    description: lot.ticker ?? lot.name,
+    proceeds: Math.round(lot.marketValue * scale),
+    costBasis: Math.round(Math.max(0, lot.costBasis ?? 0) * scale),
+    currency: (lot.currency.toUpperCase() === 'EUR' ? 'EUR' : currency),
+    acquiredDate: lot.acquiredDate ?? '',
+  }))
+}
 
 type SortKey = 'period' | 'amount' | 'name' | 'category'
 
@@ -37,7 +75,7 @@ const blank = (): Windfall => ({
 })
 
 // [icon, period, amount+cur, name, tax, account, actions]
-const GRID_COLS = 'grid grid-cols-[20px_130px_110px_2fr_110px_1fr_72px] gap-x-3 items-center'
+const GRID_COLS = 'grid grid-cols-[20px_130px_110px_2fr_190px_1fr_72px] gap-x-3 items-center'
 
 import { EditIcon, DupIcon, DelIcon } from '../../components/ui/Icons'
 
@@ -61,8 +99,10 @@ function IncomeRow({
   categoryOptions: string[];
 }) {
   const accountName = useAccountName(w.targetAccountId)
+  const sourceAccountName = useAccountName(w.sourceAccountId)
   const freq = getFrequencyDisplay({ frequency: w.frequency })
   const period = periodLabel(w.frequency, w.date, w.endDate ?? null)
+  const realizedGain = realizedGainLotsTotal(w.realizedLots)
 
   return (
     <TableRow>
@@ -78,8 +118,11 @@ function IncomeRow({
         <div className="min-w-0 truncate pl-2">
           <span>{w.name}</span>
         </div>
-        <span className="text-[10.5px] text-gray-400 truncate">{TAX_LABELS[w.taxTreatment]}</span>
-        <span className="text-[10.5px] text-gray-400 truncate">{accountName ?? '—'}</span>
+        <span className="text-[10.5px] text-gray-400 whitespace-normal leading-snug">
+          {TAX_LABELS[w.taxTreatment]}
+          {realizedGain > 0 && <span className="ml-1">gain {realizedGain.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>}
+        </span>
+        <span className="text-[10.5px] text-gray-400 truncate">{sourceAccountName ? `${sourceAccountName} → ` : ''}{accountName ?? '—'}</span>
         <div className="flex gap-2 justify-end">
           <button className="text-gray-400 hover:text-blue-500" onClick={() => setEditing(w)}><EditIcon /></button>
           <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" onClick={onDuplicate}><DupIcon /></button>
@@ -112,7 +155,41 @@ function EditForm({ editing, onChange, onSave, onCancel, categoryOptions, embedd
   categoryOptions: string[]
   embedded?: boolean
 }) {
+  const accounts = useAppStore(s => s.accounts)
   const isOneTime = editing.frequency === 'one_time'
+  const usesCapitalGainLots = isCapitalGainTreatment(editing.taxTreatment)
+  const realizedGain = realizedGainLotsTotal(editing.realizedLots)
+  function updateLot(index: number, patch: Partial<RealizedGainLot>) {
+    const lots = [...(editing.realizedLots ?? [])]
+    lots[index] = { ...lots[index], ...patch }
+    onChange({ realizedLots: lots })
+  }
+  function addLot() {
+    const lots = editing.realizedLots ?? []
+    onChange({
+      realizedLots: [
+        ...lots,
+        {
+          id: generateId(),
+          description: '',
+          proceeds: editing.amount || 0,
+          costBasis: 0,
+          currency: editing.currency,
+          acquiredDate: '',
+        },
+      ],
+    })
+  }
+  function deleteLot(index: number) {
+    onChange({ realizedLots: (editing.realizedLots ?? []).filter((_, i) => i !== index) })
+  }
+  function syncLotsFromAccount(accountId: number | undefined) {
+    const account = accountId != null
+      ? accounts.find(item => item.id === accountId && item.includedInPlanning !== false)
+      : undefined
+    const lots = realizedLotsFromAccountLots(account?.taxLots, editing.amount, editing.currency)
+    onChange({ sourceAccountId: accountId, realizedLots: lots.length > 0 ? lots : editing.realizedLots })
+  }
   return (
     <div className={embedded ? "space-y-3 mb-1" : "border border-blue-200 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4"}>
       {/* Row 1: Name + Category */}
@@ -158,7 +235,7 @@ function EditForm({ editing, onChange, onSave, onCancel, categoryOptions, embedd
           <label className="text-[11px] text-gray-500">Tax treatment</label>
           <select className="h-[32px] border border-gray-300 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800"
             value={editing.taxTreatment} onChange={e => onChange({ taxTreatment: e.target.value as TaxTreatment })}>
-            {Object.entries(TAX_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {TAX_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
         <AccountSelect
@@ -169,6 +246,108 @@ function EditForm({ editing, onChange, onSave, onCancel, categoryOptions, embedd
           onChange={id => onChange({ targetAccountId: id })}
         />
       </div>
+      {usesCapitalGainLots && (
+        <div className="grid grid-cols-[1fr_1fr] gap-3">
+          <AccountSelect
+            label="Sold from account"
+            placeholder="[Other] private equity / external"
+            allowedTypes={['investment', 'retirement']}
+            value={editing.sourceAccountId}
+            onChange={syncLotsFromAccount}
+          />
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] text-gray-500">Taxable gain from lots</label>
+            <div className="h-[32px] flex items-center px-3 text-[12px] rounded-[5px] border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300">
+              {realizedGain.toLocaleString(undefined, { maximumFractionDigits: 0 })} {editing.currency}
+            </div>
+          </div>
+        </div>
+      )}
+      {usesCapitalGainLots && (
+        <div className="rounded-[8px] border border-gray-200 dark:border-gray-700 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[12px] font-medium">Realized gain lots</div>
+              <div className="text-[10.5px] text-gray-500 dark:text-gray-400">
+                Tax uses proceeds minus cost basis for each lot. Holding period is derived from acquired date.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="text-[11px] px-2.5 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
+              onClick={addLot}
+            >
+              + Add lot
+            </button>
+          </div>
+          {(editing.realizedLots ?? []).length > 0 ? (
+            <div className="space-y-1.5">
+              {(editing.realizedLots ?? []).map((lot, index) => (
+                <div key={lot.id} className="grid grid-cols-[1.2fr_92px_92px_70px_110px_78px_24px] gap-2 items-end">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10.5px] text-gray-500">Lot / ticker</span>
+                    <input
+                      className="h-[28px] border border-gray-300 rounded-[5px] px-2 text-[11px] bg-white dark:bg-gray-800"
+                      value={lot.description}
+                      onChange={event => updateLot(index, { description: event.target.value })}
+                      placeholder="VTI lot"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10.5px] text-gray-500">Proceeds</span>
+                    <NumericInput
+                      className="h-[28px] border border-gray-300 rounded-[5px] px-2 text-[11px] bg-white dark:bg-gray-800"
+                      value={lot.proceeds}
+                      onChange={value => updateLot(index, { proceeds: value ?? 0 })}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10.5px] text-gray-500">Basis</span>
+                    <NumericInput
+                      className="h-[28px] border border-gray-300 rounded-[5px] px-2 text-[11px] bg-white dark:bg-gray-800"
+                      value={lot.costBasis}
+                      onChange={value => updateLot(index, { costBasis: value ?? 0 })}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10.5px] text-gray-500">Currency</span>
+                    <select
+                      className="h-[28px] border border-gray-300 rounded-[5px] px-1 text-[11px] bg-white dark:bg-gray-800"
+                      value={lot.currency}
+                      onChange={event => updateLot(index, { currency: event.target.value as 'USD' | 'EUR' })}
+                    >
+                      <option value="USD">USD</option>
+                      <option value="EUR">EUR</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10.5px] text-gray-500">Acquired</span>
+                    <input
+                      className="h-[28px] border border-gray-300 rounded-[5px] px-2 text-[11px] bg-white dark:bg-gray-800"
+                      value={lot.acquiredDate ?? ''}
+                      onChange={event => updateLot(index, { acquiredDate: event.target.value })}
+                      placeholder="YYYY-MM-DD"
+                    />
+                  </label>
+                  <div className="pb-1 text-[10.5px] text-gray-500">{holdingPeriodLabel(lot, editing.date, editing.taxTreatment)}</div>
+                  <button
+                    type="button"
+                    className="h-[28px] text-gray-400 hover:text-red-500"
+                    onClick={() => deleteLot(index)}
+                    aria-label="Delete lot"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[11px] text-gray-400">
+              No lots yet. Without lots, tax falls back to treating the full amount as taxable gain.
+            </div>
+          )}
+        </div>
+      )}
       {/* Row 3: Frequency + Date + End */}
       <div className="flex gap-3">
         <div className="flex flex-col gap-1 w-[160px] shrink-0">
@@ -286,7 +465,7 @@ export default function Windfalls() {
                     setEditing={setEditing}
                     onSave={() => { upsertWindfall(editing!); setEditing(null) }}
                     onDuplicate={() => setEditing({ ...w, id: generateId() })}
-                    onDelete={() => deleteWindfall(w.id)}
+                    onDelete={() => { if (confirmDelete(w.name || 'this income item')) deleteWindfall(w.id) }}
                     categoryOptions={allCategoryOptions}
                   />
                 ))}

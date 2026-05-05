@@ -10,8 +10,10 @@ import { Badge } from '../components/ui/Badge'
 import { formatCompact, formatCurrency, formatYearMonth } from '../lib/format'
 import { convertToBase, DEFAULT_EUR_USD_RATE } from '../lib/currency'
 import { projectedAnnualDividendsEUR } from '../lib/dividends'
-import { fetchTickerDividends, projectDividends } from '../lib/alphavantage'
-import type { ProjectedDividend } from '../lib/alphavantage'
+import { projectedAccountsBy } from '../lib/accountLifecycle'
+import { fetchTickerDividends, projectDividends } from '../lib/tiingo'
+import type { ProjectedDividend } from '../lib/tiingo'
+import type { Currency } from '../types'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -157,9 +159,10 @@ function MonthTooltip({ group }: { group: MonthGroup }) {
 
 export default function Investments() {
   const {
-    accounts, profile, avApiKey, dividendHistory, dividendSyncedAt,
+    accounts, profile, tiingoApiKey, lmProxyUrl, dividendHistory, dividendSyncedAt,
     setTickerDividends, setDividendSyncedAt,
     expenses, medicalCoverages, medicalExpenses,
+    pensions, realEstateEvents, transfers, windfalls,
   } = useAppStore()
 
   const [dateRange, setDateRange] = useState<'year' | 'next12'>('year')
@@ -178,13 +181,22 @@ export default function Investments() {
 
   // ── Filter excluded accounts ──
 
-  const includedAccounts = accounts.filter(a => a.includedInPlanning !== false)
-
-  // ── Date range ──
-
   const today = new Date()
   const todayStr = today.toISOString().slice(0, 10)
   const thisMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
+  const includedAccounts = projectedAccountsBy(thisMonthStr, {
+    accounts,
+    expenses,
+    medicalCoverages: medicalCoverages ?? [],
+    medicalExpenses: medicalExpenses ?? [],
+    pensions,
+    realEstateEvents,
+    transfers,
+    windfalls,
+  })
+
+  // ── Date range ──
+
   const thisYear = today.getFullYear()
   const rangeStart = dateRange === 'year' ? `${thisYear}-01-01` : todayStr
   const rangeEnd = (() => {
@@ -205,7 +217,7 @@ export default function Investments() {
 
   const getAccountNativeValue = (a: typeof accounts[0]) => {
     if (a.holdings && a.holdings.length > 0) {
-      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, a.currency, DEFAULT_EUR_USD_RATE), 0)
+      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, a.currency as Currency, DEFAULT_EUR_USD_RATE), 0)
     }
     return a.balance
   }
@@ -386,7 +398,7 @@ export default function Investments() {
 
   const projectedAnnualDiv = projectedAnnualDividendsEUR(includedAccounts, DEFAULT_EUR_USD_RATE)
 
-  // T-Bills have no dividend ticker; exclude synthetic tickers from AV sync list
+  // T-Bills have no dividend ticker; exclude synthetic tickers from Tiingo sync list
   const SYNTHETIC_TICKERS = new Set(['T-Bills'])
   const investableTickers = [...new Set(
     includedAccounts.flatMap(a => a.holdings ?? [])
@@ -456,10 +468,10 @@ export default function Investments() {
   const safeWithdrawal4pct = invested * 0.04
   const dividendCoveragePct = annualExpenses > 0 ? rangedDivTotal / annualExpenses * 100 : 0
 
-  // ── AV sync ──
+  // ── Tiingo sync ──
 
   async function syncDividendHistory() {
-    if (!avApiKey || investableTickers.length === 0) return
+    if (!tiingoApiKey || investableTickers.length === 0) return
     setDivSyncing(true); setDivSyncMsg(null); setSyncedCount(0)
     let fetched = 0, failed = 0, rateLimited = false
     for (let i = 0; i < investableTickers.length; i++) {
@@ -467,15 +479,15 @@ export default function Investments() {
       try {
         setDivSyncMsg(`Fetching ${ticker} (${i + 1}/${investableTickers.length})…`)
         setSyncedCount(i + 1)
-        setTickerDividends(ticker, await fetchTickerDividends(avApiKey, ticker))
+        setTickerDividends(ticker, await fetchTickerDividends(tiingoApiKey, ticker, lmProxyUrl))
         fetched++
       } catch (err: any) {
         failed++
-        if (err.message?.toLowerCase().includes('rate limit') || err.message?.toLowerCase().includes('25 api')) {
+        if (err.message?.toLowerCase().includes('rate limit') || err.message?.toLowerCase().includes('too many requests')) {
           rateLimited = true; break
         }
       }
-      if (i < investableTickers.length - 1) await new Promise(r => setTimeout(r, 13000))
+      if (i < investableTickers.length - 1) await new Promise(r => setTimeout(r, 500))
     }
     setDividendSyncedAt(new Date().toISOString())
     setDivSyncMsg(rateLimited
@@ -623,8 +635,8 @@ export default function Investments() {
             </span>
           )}
           {divSyncing && divSyncMsg && <span className="text-[10px] text-gray-400">{divSyncMsg}</span>}
-          {!avApiKey ? (
-            <a href="#/settings" className="text-[11px] text-blue-500 hover:underline">Add AV key</a>
+          {!tiingoApiKey ? (
+            <a href="#/settings" className="text-[11px] text-blue-500 hover:underline">Add Tiingo key</a>
           ) : investableTickers.length > 0 ? (
             <button onClick={syncDividendHistory} disabled={divSyncing}
               className="text-[11px] px-2.5 py-[3px] rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors">
@@ -643,7 +655,7 @@ export default function Investments() {
           <MetricCard
             label="Dividends"
             value={formatCompact(rangedDivTotal, 'EUR')}
-            sub={tickersWithHistory.length > 0 ? `${tickersWithHistory.length}/${investableTickers.length} tickers via AV` : 'yield-based estimate'}
+            sub={tickersWithHistory.length > 0 ? `${tickersWithHistory.length}/${investableTickers.length} tickers via Tiingo` : 'yield-based estimate'}
             valueClass="text-green-600"
           />
           <MetricCard
@@ -957,7 +969,7 @@ export default function Investments() {
                       })}
                     </div>
                     <div className="px-3 py-2 bg-amber-50 dark:bg-amber-900/20 text-[10px] text-amber-600 dark:text-amber-400">
-                      qty=0 → re-sync Plaid · "no holding" → re-sync AV after Plaid · all past → re-sync AV (stale history)
+                      qty=0 → re-sync Plaid · "no holding" → re-sync Tiingo after Plaid · all past → re-sync Tiingo (stale history)
                     </div>
                   </div>
                 )
