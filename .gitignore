@@ -9,3 +9,4 @@ CLAUDE.local.md
 worker/.dev.vars
 worker/.wrangler/
 *.tsbuildinfo
+vite.config.ts.timestamp-*.mjs
