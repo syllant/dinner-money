@@ -1,14 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank,
   FileText, User, CreditCard, Clock, Home, Receipt,
-  Banknote, Settings, RefreshCw, ArrowLeftRight,
+  Banknote, Settings, ArrowLeftRight, CircleDollarSign,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
-import { fetchAllAccounts, mapLMType } from '../../lib/lunchmoney'
-import type { Account } from '../../types'
+import { fetchEcbDailyExchangeRates, type EcbDailyRatePoint } from '../../lib/ecb'
 
 interface NavItem {
   to: string
@@ -17,10 +16,10 @@ interface NavItem {
 }
 
 const insightItems: NavItem[] = [
-  { to: '/', label: 'Overview', icon: <LayoutDashboard size={13} /> },
+  { to: '/', label: 'Lifetime projection', icon: <LayoutDashboard size={13} /> },
   { to: '/investments', label: 'Investments', icon: <TrendingUp size={13} /> },
   { to: '/cash', label: 'Cash flow', icon: <PiggyBank size={13} /> },
-  { to: '/tax', label: 'Tax', icon: <FileText size={13} /> },
+  { to: '/currencies', label: 'Currency', icon: <CircleDollarSign size={13} /> },
 ]
 
 const configItems: NavItem[] = [
@@ -31,6 +30,7 @@ const configItems: NavItem[] = [
   { to: '/config/income', label: 'Income', icon: <Banknote size={13} /> },
   { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
   { to: '/config/transfers', label: 'Transfers', icon: <ArrowLeftRight size={13} /> },
+  { to: '/config/tax', label: 'Tax', icon: <FileText size={13} /> },
 ]
 
 function SidebarNavItem({ item }: { item: NavItem }) {
@@ -53,80 +53,103 @@ function SidebarNavItem({ item }: { item: NavItem }) {
   )
 }
 
-function SyncStatus() {
-  const { lmApiKey, lmProxyUrl, accounts, setAccounts } = useAppStore()
-  const [syncing, setSyncing] = useState(false)
-
-  const syncedAt = accounts[0]?.syncedAt
-
-  async function sync() {
-    if (!lmApiKey || syncing) return
-    setSyncing(true)
-    try {
-      const { manual, synced } = await fetchAllAccounts(lmApiKey, lmProxyUrl)
-      const now = new Date().toISOString()
-      const mapped: Account[] = [
-        ...manual.filter(a => !a.closed_on).map(a => {
-          const type = mapLMType(a.type_name)
-          const rawBalance = parseFloat(a.balance)
-          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: (type === 'loan' || type === 'credit') ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: true }
-        }),
-        ...synced.map(a => {
-          const type = mapLMType(a.subtype || a.type)
-          const rawBalance = parseFloat(a.balance)
-          return { id: a.id, lmId: a.id, name: a.display_name ?? a.name, balance: (type === 'loan' || type === 'credit') ? -rawBalance : rawBalance, currency: a.currency, type, allocation: { equity: 0, bonds: 0, cash: 100 }, syncedAt: now, isManual: false }
-        }),
-      ]
-      const existing = new Map(useAppStore.getState().accounts.map(a => [a.id, a]))
-      const merged = mapped.map(a => {
-        const ex = existing.get(a.id)
-        if (!ex) return a
-        return {
-          ...a,
-          allocation: ex.allocation,
-          includedInPlanning: ex.includedInPlanning,
-          interestRate: ex.interestRate,
-          dueDate: ex.dueDate,
-          fxSplitEUR: ex.fxSplitEUR,
-        fxSplitEURRef: ex.fxSplitEURRef,
-          ...(ex.typeOverridden ? { type: ex.type, typeOverridden: true } : {}),
-        }
-      })
-      setAccounts(merged)
-    } catch (_) {
-      // silently fail — user can see details in Accounts page
-    } finally {
-      setSyncing(false)
-    }
+function MainCurrencyControl() {
+  const { profile, setProfile, setSimulationResult } = useAppStore()
+  const currency = profile.baseCurrency
+  const setCurrency = (next: 'EUR' | 'USD') => {
+    setProfile({ baseCurrency: next })
+    setSimulationResult(null)
   }
 
-  if (!lmApiKey) return null
+  return (
+    <div className="mx-[10px] mb-2 px-[4px] flex items-center justify-between gap-2">
+      <div className="text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
+        Main currency
+      </div>
+      <div className="flex h-[26px] rounded-full border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-[2px]">
+        {(['EUR', 'USD'] as const).map(next => (
+          <button
+            key={next}
+            type="button"
+            onClick={() => setCurrency(next)}
+            className={clsx(
+              'h-[20px] px-1.5 rounded-full text-[11px] leading-none transition-colors flex items-center gap-1',
+              currency === next
+                ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+            )}
+          >
+            <span>{next === 'EUR' ? '🇪🇺' : '🇺🇸'}</span>
+            <span>{next}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
-  const timeStr = syncedAt
-    ? new Date(syncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : null
-  const dateStr = syncedAt
-    ? new Date(syncedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })
-    : null
+function SidebarFxRate() {
+  const lmProxyUrl = useAppStore(s => s.lmProxyUrl)
+  const [rows, setRows] = useState<EcbDailyRatePoint[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadFx() {
+      const start = new Date()
+      start.setDate(start.getDate() - 10)
+      try {
+        const nextRows = await fetchEcbDailyExchangeRates(start.toISOString().slice(0, 10), lmProxyUrl)
+        if (!cancelled) setRows(nextRows.slice(-7))
+      } catch {
+        if (!cancelled) setRows([])
+      }
+    }
+    loadFx()
+    return () => { cancelled = true }
+  }, [lmProxyUrl])
+
+  const latest = rows.length > 0 ? rows[rows.length - 1].value : undefined
+  const first = rows.length > 0 ? rows[0].value : undefined
+  const lowerThanWeek = latest != null && first != null ? latest < first : null
+  const color = lowerThanWeek == null ? '#9ca3af' : lowerThanWeek ? '#16a34a' : '#dc2626'
+  const points = useMemo(() => {
+    if (rows.length === 0) return ''
+    const values = rows.map(row => row.value)
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const span = Math.max(max - min, 0.0001)
+    return rows.map((row, index) => {
+      const x = rows.length === 1 ? 76 : 4 + index * (144 / (rows.length - 1))
+      const y = 24 - ((row.value - min) / span) * 18
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    }).join(' ')
+  }, [rows])
+  const lastPoint = points ? points.split(' ')[points.split(' ').length - 1]?.split(',') : null
 
   return (
-    <div className="mx-[14px] mb-2 flex items-center justify-between gap-1">
-      <div className="text-[10px] text-gray-400 leading-tight">
-        {syncedAt ? (
-          <><span className="block">{dateStr} {timeStr}</span><span className="block">{accounts.length} accounts</span></>
-        ) : (
-          <span>Not synced</span>
-        )}
+    <Link
+      to="/currencies"
+      aria-label={first == null ? 'EUR/USD. Last 7d rate unavailable.' : `EUR/USD. Was ${first.toFixed(4)} 7d ago.`}
+      className="group mx-[10px] mb-2 px-[9px] py-[8px] rounded-[7px] border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/60 hover:bg-white dark:hover:bg-gray-800 transition-colors block"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em] flex items-center">
+            EUR/USD
+          </div>
+          <div className="text-[15px] font-medium tabular-nums text-gray-900 dark:text-white">
+            {latest == null ? '—' : latest.toFixed(4)}
+          </div>
+        </div>
+        <svg width="76" height="30" viewBox="0 0 152 30" className="shrink-0 overflow-visible" aria-hidden="true">
+          <polyline points={points} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          {lastPoint && <circle cx={lastPoint[0]} cy={lastPoint[1]} r="4" fill={color} />}
+        </svg>
       </div>
-      <button
-        onClick={sync}
-        disabled={syncing}
-        title="Refresh accounts from LunchMoney"
-        className="p-[5px] rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-40"
-      >
-        <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
-      </button>
-    </div>
+      <span className="pointer-events-none fixed left-[10px] bottom-[74px] z-50 w-44 rounded-lg bg-gray-900 px-2.5 py-2 text-[10px] leading-[1.4] text-white opacity-0 shadow-xl transition-opacity duration-100 group-hover:opacity-100 dark:bg-gray-700">
+        {first == null ? 'Last 7d rate unavailable.' : `Was ${first.toFixed(4)} 7d ago.`}
+      </span>
+    </Link>
   )
 }
 
@@ -160,8 +183,8 @@ export function Sidebar() {
 
       <div className="flex-1" />
 
-      {/* Sync status */}
-      <SyncStatus />
+      <MainCurrencyControl />
+      <SidebarFxRate />
 
       {/* Settings */}
       <SidebarNavItem item={{ to: '/settings', label: 'Settings', icon: <Settings size={13} /> }} />

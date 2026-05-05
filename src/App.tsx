@@ -4,6 +4,7 @@ import { useAppStore } from './store/useAppStore'
 import Overview from './pages/Overview'
 import Investments from './pages/Investments'
 import CashFlow from './pages/CashFlow'
+import Currencies from './pages/Currencies'
 import Tax from './pages/Tax'
 import Profile from './pages/config/Profile'
 import Accounts from './pages/config/Accounts'
@@ -33,9 +34,11 @@ export default function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/investments" element={<Investments />} />
           <Route path="/cash" element={<CashFlow />} />
-          <Route path="/tax" element={<Tax />} />
+          <Route path="/currencies" element={<Currencies />} />
+          <Route path="/tax" element={<Navigate to="/config/tax" replace />} />
           <Route path="/config/profile" element={<Profile />} />
           <Route path="/config/accounts" element={<Accounts />} />
+          <Route path="/config/tax" element={<Tax />} />
           <Route path="/config/pensions" element={<Pensions />} />
           <Route path="/config/real-estate" element={<RealEstate />} />
           <Route path="/config/income" element={<Windfalls />} />

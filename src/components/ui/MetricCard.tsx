@@ -1,12 +1,13 @@
+import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { InfoTooltip } from './InfoTooltip'
 
 interface MetricCardProps {
   label: string
-  value: string
-  sub?: string
+  value: ReactNode
+  sub?: ReactNode
   valueClass?: string
-  tooltip?: string
+  tooltip?: ReactNode
 }
 
 export function MetricCard({ label, value, sub, valueClass, tooltip }: MetricCardProps) {
