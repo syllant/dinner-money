@@ -1,56 +1,104 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { Button } from '../../components/ui/Button'
 import { Banner } from '../../components/ui/Banner'
 import { fetchCurrentUser, LunchMoneyError } from '../../lib/lunchmoney'
+import { fetchFredMonthlySeries } from '../../lib/fred'
+import { fetchMonthlyAdjustedReturns } from '../../lib/tiingo'
+import { fetchSnapTradeStatus } from '../../lib/snaptrade'
+
+type ApiService = 'lunchmoney' | 'tiingo' | 'fred' | 'snaptrade'
 
 export default function Settings() {
-  const { lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, taxConfig, setTaxConfig, profile, setProfile, minTransactionEUR, setMinTransactionEUR, avApiKey, setAvApiKey } = useAppStore()
+  const {
+    lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl,
+    minTransactionEUR, setMinTransactionEUR,
+    tiingoApiKey, setTiingoApiKey,
+    fredApiKey, setFredApiKey,
+    snapTradeClientId, setSnapTradeClientId,
+    snapTradeConsumerKey, setSnapTradeConsumerKey,
+    snapTradeUserId, snapTradeUserSecret,
+  } = useAppStore()
   const [keyInput, setKeyInput] = useState(lmApiKey ?? '')
   const [proxyInput, setProxyInput] = useState(lmProxyUrl ?? '')
-  const [avKeyInput, setAvKeyInput] = useState(avApiKey ?? '')
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
-  const [keySaved, setKeySaved] = useState(false)
+  const [tiingoKeyInput, setTiingoKeyInput] = useState(tiingoApiKey ?? '')
+  const [fredKeyInput, setFredKeyInput] = useState(fredApiKey ?? '')
+  const [snapTradeClientIdInput, setSnapTradeClientIdInput] = useState(snapTradeClientId ?? '')
+  const [snapTradeConsumerKeyInput, setSnapTradeConsumerKeyInput] = useState(snapTradeConsumerKey ?? '')
+  const [testingService, setTestingService] = useState<ApiService | null>(null)
+  const [testResults, setTestResults] = useState<Partial<Record<ApiService, { ok: boolean; message: string }>>>({})
+  const [savedService, setSavedService] = useState<ApiService | null>(null)
 
-  function saveKey() {
-    setLmApiKey(keyInput.trim() || null)
-    setKeySaved(true)
-    setTestResult(null)
+  function setApiResult(service: ApiService, result: { ok: boolean; message: string }) {
+    setTestResults(current => ({ ...current, [service]: result }))
   }
 
-  async function testConnection() {
-    if (!keyInput.trim()) return
-    setTesting(true)
-    setTestResult(null)
-    setKeySaved(false)
+  function saveApiKey(service: ApiService) {
+    if (service === 'lunchmoney') setLmApiKey(keyInput.trim() || null)
+    if (service === 'tiingo') setTiingoApiKey(tiingoKeyInput.trim() || null)
+    if (service === 'fred') setFredApiKey(fredKeyInput.trim() || null)
+    if (service === 'snaptrade') {
+      setSnapTradeClientId(snapTradeClientIdInput.trim() || null)
+      setSnapTradeConsumerKey(snapTradeConsumerKeyInput.trim() || null)
+    }
+    setSavedService(service)
+    setApiResult(service, { ok: true, message: 'Key saved locally' })
+  }
+
+  async function testApiConnection(service: ApiService) {
+    const key = service === 'lunchmoney'
+      ? keyInput.trim()
+      : service === 'tiingo'
+        ? tiingoKeyInput.trim()
+        : service === 'fred'
+          ? fredKeyInput.trim()
+          : snapTradeClientIdInput.trim()
+    if (!key) return
+    setTestingService(service)
+    setSavedService(null)
     const proxy = proxyInput.trim() || null
     try {
-      const user = await fetchCurrentUser(keyInput.trim(), proxy)
-      setLmApiKey(keyInput.trim())
-      setLmProxyUrl(proxy)
-      setKeySaved(true)
-      setTestResult({ ok: true, message: `Connected as ${user.user_name} (${user.user_email})` })
+      if (service === 'lunchmoney') {
+        const user = await fetchCurrentUser(key, proxy)
+        setLmApiKey(key)
+        setLmProxyUrl(proxy)
+        setApiResult(service, { ok: true, message: `Connected as ${user.user_name} (${user.user_email})` })
+      } else if (service === 'tiingo') {
+        const rows = await fetchMonthlyAdjustedReturns(key, 'VTI', '2026-01-01', proxy)
+        setTiingoApiKey(key)
+        setApiResult(service, { ok: true, message: `VTI returns reachable (${rows.length} monthly rows)` })
+      } else if (service === 'fred') {
+        const rows = await fetchFredMonthlySeries(key, 'DGS10', '2026-01-01', proxy)
+        setFredApiKey(key)
+        setApiResult(service, { ok: true, message: `DGS10 reachable (${rows.length} monthly rows)` })
+      } else {
+        if (!proxy) throw new Error('SnapTrade requires the Cloudflare Worker proxy so requests can be signed server-side.')
+        const status = await fetchSnapTradeStatus(proxy, snapTradeClientIdInput, snapTradeConsumerKeyInput)
+        setLmProxyUrl(proxy)
+        setSnapTradeClientId(snapTradeClientIdInput.trim() || null)
+        setSnapTradeConsumerKey(snapTradeConsumerKeyInput.trim() || null)
+        const upstream = status.upstream?.online === true ? 'online' : 'reachable'
+        setApiResult(service, { ok: true, message: `SnapTrade ${upstream}` })
+      }
     } catch (err) {
-      if (err instanceof LunchMoneyError) {
+      if (service === 'lunchmoney' && err instanceof LunchMoneyError) {
         const is401 = err.status === 401
         const msg = is401
           ? 'Invalid API key — double-check the token at my.lunchmoney.app/developers.'
           : `LunchMoney returned ${err.status}. ${proxy ? 'Check that your proxy URL is correct.' : 'Try adding a CORS proxy URL below.'}`
-        setTestResult({ ok: false, message: msg })
+        setApiResult(service, { ok: false, message: msg })
       } else if (err instanceof TypeError) {
-        // fetch() throws TypeError on network/CORS failure
         const msg = proxy
           ? `Could not reach the proxy at ${proxy}. Make sure the Cloudflare Worker is deployed and the URL is correct.`
-          : 'Blocked by CORS — LunchMoney only allows requests from its own app. Deploy a Cloudflare Worker proxy and enter its URL below.'
-        setTestResult({ ok: false, message: msg })
+          : 'Blocked by CORS or network policy. Add the Cloudflare Worker proxy URL below and retry.'
+        setApiResult(service, { ok: false, message: msg })
       } else {
-        setTestResult({ ok: false, message: 'Connection failed — unknown error. Check the browser console for details.' })
+        const detail = err instanceof Error ? err.message : 'Unknown error'
+        setApiResult(service, { ok: false, message: detail })
       }
     } finally {
-      setTesting(false)
+      setTestingService(null)
     }
   }
 
@@ -66,7 +114,12 @@ export default function Settings() {
       monteCarloConfig: store.monteCarloConfig,
       taxConfig: store.taxConfig,
       dividendHistory: store.dividendHistory,
-      avApiKey: store.avApiKey,
+      tiingoApiKey: store.tiingoApiKey,
+      fredApiKey: store.fredApiKey,
+      snapTradeClientId: store.snapTradeClientId,
+      snapTradeConsumerKey: store.snapTradeConsumerKey,
+      snapTradeUserId: store.snapTradeUserId,
+      snapTradeUserSecret: store.snapTradeUserSecret,
     }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -93,7 +146,11 @@ export default function Settings() {
         if (data.windfalls) store.setWindfalls(data.windfalls)
         if (data.monteCarloConfig) store.setMonteCarloConfig(data.monteCarloConfig)
         if (data.taxConfig) store.setTaxConfig(data.taxConfig)
-        if (data.avApiKey) store.setAvApiKey(data.avApiKey)
+        if (data.tiingoApiKey || data.avApiKey) store.setTiingoApiKey(data.tiingoApiKey ?? data.avApiKey)
+        if (data.fredApiKey) store.setFredApiKey(data.fredApiKey)
+        if (data.snapTradeClientId) store.setSnapTradeClientId(data.snapTradeClientId)
+        if (data.snapTradeConsumerKey) store.setSnapTradeConsumerKey(data.snapTradeConsumerKey)
+        if (data.snapTradeUserId || data.snapTradeUserSecret) store.setSnapTradeUser(data.snapTradeUserId ?? null, data.snapTradeUserSecret ?? null)
         if (data.dividendHistory) {
           Object.entries(data.dividendHistory as Record<string, any[]>).forEach(([ticker, divs]) =>
             store.setTickerDividends(ticker, divs as any)
@@ -110,44 +167,172 @@ export default function Settings() {
   return (
     <div>
       <PageHeader title="Settings" />
-      <div className="p-4 max-w-xl space-y-6">
+      <div className="p-4 max-w-5xl space-y-6">
 
-        {/* LM API Key */}
         <section>
-          <h2 className="text-[13px] font-medium mb-2">LunchMoney connection</h2>
+          <h2 className="text-[13px] font-medium mb-2">API keys</h2>
           <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-            Your API key is stored locally in your browser only — it is never sent to any server.
-            Get yours at{' '}
-            <a href="https://my.lunchmoney.app/developers" target="_blank" rel="noreferrer" className="text-blue-600 underline">
-              my.lunchmoney.app/developers
-            </a>.
+            Keys are stored locally in your browser only. Test requests use the proxy below when configured.
           </p>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              className="flex-1 h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-              value={keyInput}
-              onChange={(e) => { setKeyInput(e.target.value); setKeySaved(false) }}
-              placeholder="lm_…"
-            />
-            <Button onClick={saveKey} disabled={!keyInput.trim()}>Save</Button>
-            <Button variant="success" onClick={testConnection} disabled={testing || !keyInput.trim()}>
-              {testing ? 'Testing…' : 'Test connection'}
-            </Button>
+          <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-[8px]">
+            <table className="w-full text-[11px]">
+              <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                <tr>
+                  <th className="text-left font-medium px-3 py-2">Service</th>
+                  <th className="text-left font-medium px-3 py-2">Key</th>
+                  <th className="text-left font-medium px-3 py-2">Used for</th>
+                  <th className="text-left font-medium px-3 py-2">Status</th>
+                  <th className="text-right font-medium px-3 py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {([
+                  {
+                    service: 'lunchmoney' as const,
+                    label: 'LunchMoney',
+                    href: 'https://my.lunchmoney.app/developers',
+                    value: keyInput,
+                    saved: lmApiKey,
+                    placeholder: 'lm_…',
+                    onChange: setKeyInput,
+                    use: 'Account sync',
+                  },
+                  {
+                    service: 'tiingo' as const,
+                    label: 'Tiingo',
+                    href: 'https://www.tiingo.com/account/api/token',
+                    value: tiingoKeyInput,
+                    saved: tiingoApiKey,
+                    placeholder: 'Tiingo API key',
+                    onChange: setTiingoKeyInput,
+                    use: 'ETF returns and dividends',
+                  },
+                  {
+                    service: 'fred' as const,
+                    label: 'FRED',
+                    href: 'https://fred.stlouisfed.org/docs/api/api_key.html',
+                    value: fredKeyInput,
+                    saved: fredApiKey,
+                    placeholder: 'FRED API key',
+                    onChange: setFredKeyInput,
+                    use: 'Treasury yields, FX, CPI',
+                  },
+                ]).map(row => {
+                  const result = testResults[row.service]
+                  const isTesting = testingService === row.service
+                  return (
+                    <tr key={row.service}>
+                      <td className="px-3 py-2 align-top">
+                        <a href={row.href} target="_blank" rel="noreferrer" className="font-medium text-blue-600 dark:text-blue-400 hover:underline">
+                          {row.label}
+                        </a>
+                      </td>
+                      <td className="px-3 py-2 align-top min-w-[220px]">
+                        <input
+                          type="password"
+                          className="w-full h-[30px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                          value={row.value}
+                          onChange={event => {
+                            row.onChange(event.target.value)
+                            setSavedService(null)
+                          }}
+                          placeholder={row.placeholder}
+                        />
+                      </td>
+                      <td className="px-3 py-2 align-top text-gray-500 dark:text-gray-400">{row.use}</td>
+                      <td className="px-3 py-2 align-top min-w-[180px]">
+                        {result ? (
+                          <span className={result.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}>
+                            {result.ok ? '✓ ' : '✗ '}{result.message}
+                          </span>
+                        ) : row.saved ? (
+                          <span className="text-green-600 dark:text-green-400">✓ Saved</span>
+                        ) : savedService === row.service ? (
+                          <span className="text-green-600 dark:text-green-400">✓ Saved</span>
+                        ) : (
+                          <span className="text-gray-400">Not configured</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex justify-end gap-2">
+                          <Button onClick={() => saveApiKey(row.service)} disabled={!row.value.trim()}>Save</Button>
+                          <Button variant="success" onClick={() => testApiConnection(row.service)} disabled={isTesting || !row.value.trim()}>
+                            {isTesting ? 'Testing…' : 'Test'}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+                <tr>
+                  <td className="px-3 py-2 align-top">
+                    <a href="https://dashboard.snaptrade.com/" target="_blank" rel="noreferrer" className="font-medium text-blue-600 dark:text-blue-400 hover:underline">
+                      SnapTrade
+                    </a>
+                  </td>
+                  <td className="px-3 py-2 align-top min-w-[320px]">
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input
+                        type="password"
+                        className="w-full h-[30px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                        value={snapTradeClientIdInput}
+                        onChange={event => {
+                          setSnapTradeClientIdInput(event.target.value)
+                          setSavedService(null)
+                        }}
+                        placeholder="Client ID"
+                      />
+                      <input
+                        type="password"
+                        className="w-full h-[30px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                        value={snapTradeConsumerKeyInput}
+                        onChange={event => {
+                          setSnapTradeConsumerKeyInput(event.target.value)
+                          setSavedService(null)
+                        }}
+                        placeholder="Consumer key"
+                      />
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 align-top text-gray-500 dark:text-gray-400">
+                    Brokerage holdings, positions, and tax lots
+                  </td>
+                  <td className="px-3 py-2 align-top min-w-[180px]">
+                    {testResults.snaptrade ? (
+                      <span className={testResults.snaptrade.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}>
+                        {testResults.snaptrade.ok ? '✓ ' : '✗ '}{testResults.snaptrade.message}
+                      </span>
+                    ) : snapTradeClientId && snapTradeConsumerKey ? (
+                      <span className="text-green-600 dark:text-green-400">
+                        ✓ Saved{snapTradeUserId && snapTradeUserSecret ? ' + user ready' : ''}
+                      </span>
+                    ) : savedService === 'snaptrade' ? (
+                      <span className="text-green-600 dark:text-green-400">✓ Saved</span>
+                    ) : (
+                      <span className="text-gray-400">Not configured</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        onClick={() => saveApiKey('snaptrade')}
+                        disabled={!snapTradeClientIdInput.trim() || !snapTradeConsumerKeyInput.trim()}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        variant="success"
+                        onClick={() => testApiConnection('snaptrade')}
+                        disabled={testingService === 'snaptrade' || !snapTradeClientIdInput.trim() || !snapTradeConsumerKeyInput.trim()}
+                      >
+                        {testingService === 'snaptrade' ? 'Testing…' : 'Test'}
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          {testResult && (
-            <div className={`mt-2 text-[11.5px] ${testResult.ok ? 'text-green-600' : 'text-red-500'}`}>
-              {testResult.ok ? '✓ ' : '✗ '}{testResult.message}
-            </div>
-          )}
-          {keySaved && (
-            <div className="mt-2 text-[11.5px] text-green-600">
-              ✓ API key saved.{' '}
-              <Link to="/config/accounts" className="underline font-medium">
-                Go to Accounts to sync your balances →
-              </Link>
-            </div>
-          )}
         </section>
 
         <hr className="border-gray-200 dark:border-gray-700" />
@@ -186,8 +371,9 @@ export default function Settings() {
             <p className="mt-2">
               The worker source is in{' '}
               <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">worker/lm-proxy.js</code>{' '}
-              in the repo. It is stateless and logs nothing — your API key is only sent in the Authorization header,
-              directly to LunchMoney.
+              in the repo. It is stateless and logs nothing. For SnapTrade, the worker signs requests server-side;
+              set <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">SNAPTRADE_CLIENT_ID</code> and{' '}
+              <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">SNAPTRADE_CONSUMER_KEY</code> as Worker secrets for the safest setup.
             </p>
           </details>
           <div className="flex gap-2">
@@ -213,49 +399,6 @@ export default function Settings() {
 
         <hr className="border-gray-200 dark:border-gray-700" />
 
-        {/* Alpha Vantage */}
-        <section>
-          <h2 className="text-[13px] font-medium mb-2">Alpha Vantage API key</h2>
-          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-            Used to fetch per-ticker dividend history on the Investments page. Free tier: 25 requests/day.
-            Get a free key at{' '}
-            <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noreferrer" className="text-blue-600 underline">
-              alphavantage.co
-            </a>.
-          </p>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              className="flex-1 h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-              value={avKeyInput}
-              onChange={e => setAvKeyInput(e.target.value)}
-              placeholder="Enter Alpha Vantage API key"
-            />
-            <Button onClick={() => setAvApiKey(avKeyInput.trim() || null)} disabled={!avKeyInput.trim()}>Save</Button>
-          </div>
-          {avApiKey && <div className="mt-1 text-[11px] text-green-600">✓ Key saved</div>}
-        </section>
-
-        <hr className="border-gray-200 dark:border-gray-700" />
-
-        {/* Display currency */}
-        <section>
-          <h2 className="text-[13px] font-medium mb-2">Display currency</h2>
-          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-            Base currency used for net worth, projections, and dashboard totals.
-          </p>
-          <select
-            className="h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-            value={profile.baseCurrency}
-            onChange={e => setProfile({ baseCurrency: e.target.value as 'USD' | 'EUR' })}
-          >
-            <option value="EUR">EUR (€)</option>
-            <option value="USD">USD ($)</option>
-          </select>
-        </section>
-
-        <hr className="border-gray-200 dark:border-gray-700" />
-
         {/* Income & Expense display */}
         <section>
           <h2 className="text-[13px] font-medium mb-1">Income & expense display</h2>
@@ -277,34 +420,6 @@ export default function Settings() {
             <div className="text-[11px] text-gray-400 mt-4">
               Items below this threshold are hidden in Income &amp; Expenses and the net totals.
             </div>
-          </div>
-        </section>
-
-        <hr className="border-gray-200 dark:border-gray-700" />
-
-        {/* Tax rate assumptions */}
-        <section>
-          <h2 className="text-[13px] font-medium mb-1">Tax rate assumptions</h2>
-          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
-            Effective rates used for the Tax page estimates.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: '🇺🇸 US federal effective rate (%)', key: 'usFederalEffectiveRate' as const },
-              { label: '🇺🇸 California effective rate (%)', key: 'usCaliforniaEffectiveRate' as const },
-              { label: '🇫🇷 France combined rate — IR + PS (%)', key: 'frCombinedEffectiveRate' as const },
-            ].map(({ label, key }) => (
-              <div key={key} className="flex flex-col gap-1">
-                <label className="text-[11px] text-gray-500 dark:text-gray-400">{label}</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  className="h-[32px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                  value={taxConfig[key]}
-                  onChange={(e) => setTaxConfig({ [key]: parseFloat(e.target.value) })}
-                />
-              </div>
-            ))}
           </div>
         </section>
 

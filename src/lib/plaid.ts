@@ -1,4 +1,4 @@
-import type { PlaidHolding, PlaidDividend, AssetAllocation } from '../types'
+import type { PlaidHolding, PlaidDividend, AssetAllocation, TaxLot } from '../types'
 
 async function plaidPost(proxyUrl: string, path: string, body: object): Promise<any> {
   const res = await fetch(`${proxyUrl.replace(/\/$/, '')}/plaid${path}`, {
@@ -16,14 +16,6 @@ async function plaidPost(proxyUrl: string, path: string, body: object): Promise<
 
 export async function fetchPlaidHoldings(proxyUrl: string, accessToken: string): Promise<PlaidHolding[]> {
   const data = await plaidPost(proxyUrl, '/investments/holdings/get', { access_token: accessToken })
-  // Log raw response for debugging multi-currency brokers (e.g. IBKR CUR:EUR vs CUR:USD)
-  console.debug('[Plaid] raw holdings:', data.holdings.map((h: any) => ({
-    ticker: data.securities.find((s: any) => s.security_id === h.security_id)?.ticker_symbol,
-    name: data.securities.find((s: any) => s.security_id === h.security_id)?.name,
-    iso_currency_code: h.iso_currency_code,
-    institution_value: h.institution_value,
-    type: data.securities.find((s: any) => s.security_id === h.security_id)?.type,
-  })))
   return data.holdings.map((h: any) => {
     const sec = data.securities.find((s: any) => s.security_id === h.security_id)
     return {
@@ -42,6 +34,27 @@ export async function fetchPlaidHoldings(proxyUrl: string, accessToken: string):
 export interface PlaidInvestmentData {
   dividends: PlaidDividend[]
   buyDates: Record<string, string>  // ticker → most recent buy transaction date (YYYY-MM-DD)
+}
+
+export function deriveTaxLots(holdings: PlaidHolding[], source: TaxLot['source']): TaxLot[] {
+  return holdings
+    .filter(holding => !holding.ticker?.startsWith('CUR:'))
+    .filter(holding => holding.institutionValue > 0)
+    .map((holding, index) => ({
+      id: `${source}-${holding.ticker ?? holding.name}-${index}`,
+      ticker: holding.ticker,
+      name: holding.name,
+      quantity: holding.quantity,
+      marketValue: holding.institutionValue,
+      costBasis: holding.costBasis,
+      currency: holding.currency,
+      acquiredDate: holding.purchaseDate,
+      source,
+    }))
+}
+
+export function derivePlaidTaxLots(holdings: PlaidHolding[]): TaxLot[] {
+  return deriveTaxLots(holdings, 'plaid')
 }
 
 export async function fetchPlaidInvestmentData(proxyUrl: string, accessToken: string): Promise<PlaidInvestmentData> {
@@ -81,22 +94,23 @@ export async function fetchPlaidInvestmentData(proxyUrl: string, accessToken: st
   return { dividends, buyDates }
 }
 
-// Derive equity/bonds/cash split from Plaid holdings security types
+// Derive equity/bonds/cash split from holdings security types.
+// Uses flexible substring matching to handle both Plaid ('fixed income', 'cash')
+// and SnapTrade type strings ('fixed_income', 'bond', 'money market', etc.).
 export function computeAllocationFromHoldings(holdings: PlaidHolding[]): AssetAllocation {
-  const total = holdings.reduce((s, h) => s + h.institutionValue, 0)
-  if (total === 0) return { equity: 0, bonds: 0, cash: 100 }
+  const total = holdings.reduce((s, h) => s + Math.max(0, h.institutionValue), 0)
+  if (total <= 0) return { equity: 0, bonds: 0, cash: 100 }
 
   let eq = 0, bd = 0, cash = 0
   for (const h of holdings) {
     const v = h.institutionValue
     const t = h.securityType.toLowerCase()
-    if (t === 'fixed income') bd += v
-    else if (t === 'cash') cash += v
+    if (t.includes('cash') || t.includes('money market')) cash += v
+    else if (t.includes('fixed') || t.includes('bond')) bd += v
     else eq += v  // equity, etf, mutual fund, derivative, other
   }
 
-  const r = (n: number) => Math.round(n / total * 100)
-  const eqPct = r(eq)
-  const bdPct = r(bd)
+  const eqPct = Math.round(eq / total * 100)
+  const bdPct = Math.round(bd / total * 100)
   return { equity: eqPct, bonds: bdPct, cash: Math.max(0, 100 - eqPct - bdPct) }
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePlaidLink } from 'react-plaid-link'
 import { useAppStore } from '../store/useAppStore'
+import { confirmDelete } from '../lib/confirm'
 
 export function PlaidConnect({
   isLinked,
@@ -109,7 +110,7 @@ export function PlaidConnect({
           )}
           <span className="text-gray-200 dark:text-gray-700">|</span>
           <button
-            onClick={onUnlink}
+            onClick={() => { if (confirmDelete('this Plaid connection')) onUnlink() }}
             className="text-[11px] text-red-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
           >
             Disconnect
