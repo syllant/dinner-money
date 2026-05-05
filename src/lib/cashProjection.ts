@@ -12,11 +12,11 @@ function toEUR(amount: number, currency: string): number {
 /** Returns true when accountId is unset or points to a cash-type account */
 function affectsCash(accountId: number | undefined, accounts: Account[]): boolean {
   if (accountId == null) return true
-  const acc = accounts.find(a => a.id === accountId)
+  const acc = accounts.find(a => a.id === accountId && a.includedInPlanning !== false)
   return !acc || acc.type === 'cash'
 }
 
-export type CashEventType = 'real_estate' | 'windfall' | 'one_time_expense' | 'tax_payment' | 'transfer' | 'dividend'
+export type CashEventType = 'real_estate' | 'windfall' | 'one_time_expense' | 'tax_payment' | 'transfer' | 'dividend' | 'other'
 
 export interface CashEvent {
   label: string
@@ -80,7 +80,7 @@ export interface BuildCashProjectionArgs {
   taxConfig: TaxConfig
   profile: UserProfile
   months?: number
-  annualDivEUR?: number  // override from caller (e.g. AV-based); falls back to formula
+  annualDivEUR?: number  // override from caller (e.g. Tiingo-based); falls back to formula
 }
 
 export function buildCashProjection({
@@ -93,7 +93,6 @@ export function buildCashProjection({
   windfalls,
   transfers,
   taxConfig,
-  profile,
   months = 12,
   annualDivEUR: annualDivEUROverride,
 }: BuildCashProjectionArgs): ProjectedMonth[] {
@@ -161,6 +160,13 @@ export function buildCashProjection({
 
     // Events array declared early so yearly items (transfers, expenses) can push to it
     const events: CashEvent[] = []
+    const accountDeltaEUR = new Map<number, number>()
+    const addAccountDelta = (accountId: number | undefined, amount: number, currency: string) => {
+      if (accountId == null || amount === 0) return
+      const acc = accounts.find(a => a.id === accountId)
+      if (!acc || acc.type !== 'cash') return
+      accountDeltaEUR.set(accountId, (accountDeltaEUR.get(accountId) ?? 0) + toEUR(amount, currency))
+    }
 
     // ── Recurring burn: monthly expenses only (yearly handled as events below) ──
     let monthlyBurn = 0
@@ -180,6 +186,7 @@ export function buildCashProjection({
       if (exp.frequency === 'monthly') {
         const amt = toEUR(exp.amount, exp.currency)
         monthlyBurn += amt
+        addAccountDelta((exp as Expense).sourceAccountId, -exp.amount, exp.currency)
         recurringItems.push({ category: cat, name: exp.name, amountEUR: amt, currency: exp.currency.toUpperCase(), amountNative: exp.amount })
       }
     }
@@ -196,6 +203,7 @@ export function buildCashProjection({
       if (afterStart && beforeEnd) {
         const amt = toEUR(re.amount, re.currency)
         monthlyBurn += amt
+        addAccountDelta(re.sourceAccountId, -re.amount, re.currency)
         recurringItems.push({ category: 'Real estate', name: re.notes?.trim() || 'Rent', amountEUR: amt, currency: re.currency.toUpperCase(), amountNative: re.amount })
       }
     }
@@ -218,6 +226,8 @@ export function buildCashProjection({
       if (tr.frequency === 'yearly') {
         // Fire as one-time event only in the anniversary month
         if (m !== trM) continue
+        if (fromCash) addAccountDelta(tr.fromAccountId, -tr.amount, tr.currency)
+        if (toCash) addAccountDelta(tr.toAccountId, tr.amount, tr.currency)
         const sign = toCash && !fromCash ? 1 : fromCash && !toCash ? -1 : 0
         if (sign === 0) continue
         const amtEUR = toEUR(tr.amount, tr.currency)
@@ -238,9 +248,14 @@ export function buildCashProjection({
       const amtEUR = toEUR(tr.amount, tr.currency)
       if (fromCash && !toCash) {
         monthlyBurn += amtEUR
+        addAccountDelta(tr.fromAccountId, -tr.amount, tr.currency)
         recurringItems.push({ category: 'Transfer', name: tr.name || 'Transfer', amountEUR: amtEUR, currency: tr.currency.toUpperCase(), amountNative: tr.amount })
       } else if (!fromCash && toCash) {
         monthlyBurn -= amtEUR  // inflow (shown in income items)
+        addAccountDelta(tr.toAccountId, tr.amount, tr.currency)
+      } else if (fromCash && toCash) {
+        addAccountDelta(tr.fromAccountId, -tr.amount, tr.currency)
+        addAccountDelta(tr.toAccountId, tr.amount, tr.currency)
       }
     }
 
@@ -281,9 +296,11 @@ export function buildCashProjection({
           amountNative: p.amount,
           bypassesCash: false,
         })
+        addAccountDelta(p.targetAccountId, p.amount, p.currency)
       } else {
         // Monthly
         monthlyIncome += amtEUR
+        addAccountDelta(p.targetAccountId, p.amount, p.currency)
         recurringIncomeItems.push({
           category: srcLabel,
           name: nameLabel,
@@ -293,8 +310,6 @@ export function buildCashProjection({
         })
       }
     }
-
-    const recurringNetEUR = monthlyIncome - monthlyBurn
 
     // ── One-time events ──
 
@@ -318,6 +333,7 @@ export function buildCashProjection({
         accountNote: relAcc ? `${re.eventType === 'sell' ? '→' : '←'} ${relAcc.name}` : undefined,
         bypassesCash: bypasses,
       })
+      if (!bypasses) addAccountDelta(relevantId, re.amount * sign, re.currency)
     }
 
     // Windfalls (income)
@@ -338,6 +354,7 @@ export function buildCashProjection({
         const beforeEnd = endY === null || y < endY || (y === endY && m <= (endM ?? 12))
         if (afterStart && beforeEnd && !bypasses) {
           monthlyIncome += amtEUR
+          addAccountDelta(wf.targetAccountId, wf.amount, wf.currency)
           recurringIncomeItems.push({ category: cat, name: wf.name, amountEUR: amtEUR, currency: wf.currency.toUpperCase(), amountNative: wf.amount })
         }
       } else if (freq === 'yearly') {
@@ -352,6 +369,7 @@ export function buildCashProjection({
             amountEUR: bypasses ? 0 : amtEUR, currency: wf.currency,
             amountNative: wf.amount, accountNote, bypassesCash: bypasses,
           })
+          if (!bypasses) addAccountDelta(wf.targetAccountId, wf.amount, wf.currency)
         }
       } else {
         // one_time
@@ -362,6 +380,7 @@ export function buildCashProjection({
           amountEUR: bypasses ? 0 : amtEUR, currency: wf.currency,
           amountNative: wf.amount, accountNote, bypassesCash: bypasses,
         })
+        if (!bypasses) addAccountDelta(wf.targetAccountId, wf.amount, wf.currency)
       }
     }
 
@@ -385,6 +404,7 @@ export function buildCashProjection({
           accountNote: sourceAcc ? `← ${sourceAcc.name}` : undefined,
           bypassesCash: bypasses,
         })
+        if (!bypasses) addAccountDelta((exp as Expense).sourceAccountId, -exp.amount, exp.currency)
       } else if (exp.frequency === 'yearly') {
         // Fire once per year in the anniversary month
         const [eY, eM] = exp.startDate.split('-').map(Number)
@@ -404,6 +424,7 @@ export function buildCashProjection({
           accountNote: sourceAcc ? `← ${sourceAcc.name}` : undefined,
           bypassesCash: bypasses,
         })
+        if (!bypasses) addAccountDelta((exp as Expense).sourceAccountId, -exp.amount, exp.currency)
       } else if (exp.frequency === 'custom' && exp.installments) {
         const total = exp.installments.length
         for (let instIdx = 0; instIdx < total; instIdx++) {
@@ -421,6 +442,7 @@ export function buildCashProjection({
             bypassesCash: bypasses,
             installmentNote: `installment ${instIdx + 1}/${total}`,
           })
+          if (!bypasses) addAccountDelta((exp as Expense).sourceAccountId, -inst.amount, exp.currency)
         }
       }
     }
@@ -441,6 +463,29 @@ export function buildCashProjection({
         amountNative: -qp.estimatedDue,
         bypassesCash: bypasses,
       })
+      if (!bypasses) addAccountDelta(qp.fundAccountId, -qp.estimatedDue, 'USD')
+    }
+
+    for (const settlement of taxConfig.settlements ?? []) {
+      const [settleY, settleM] = settlement.date.split('-').map(Number)
+      if (settleY !== y || settleM !== m) continue
+      const sign = settlement.kind === 'refund' ? 1 : -1
+      const bypasses = !affectsCash(settlement.accountId, accounts)
+      const jurisdiction = settlement.jurisdiction === 'state'
+        ? 'State'
+        : settlement.jurisdiction === 'france'
+          ? 'France'
+          : 'Federal'
+      events.push({
+        label: `${jurisdiction} ${settlement.kind === 'refund' ? 'tax refund' : 'tax paid'} for ${settlement.taxYear}`,
+        type: 'tax_payment',
+        category: 'Tax',
+        amountEUR: bypasses ? 0 : toEUR(settlement.amount, settlement.currency) * sign,
+        currency: settlement.currency,
+        amountNative: settlement.amount * sign,
+        bypassesCash: bypasses,
+      })
+      if (!bypasses) addAccountDelta(settlement.accountId, settlement.amount * sign, settlement.currency)
     }
 
     // One-time transfers
@@ -455,6 +500,8 @@ export function buildCashProjection({
       const toCash = toAcc?.type === 'cash'
 
       if (!fromCash && !toCash) continue  // investment-to-investment, no cash impact
+      if (fromCash) addAccountDelta(tr.fromAccountId, -tr.amount, tr.currency)
+      if (toCash) addAccountDelta(tr.toAccountId, tr.amount, tr.currency)
 
       const sign = toCash && !fromCash ? 1 : fromCash && !toCash ? -1 : 0
       if (sign === 0) continue  // cash-to-cash, neutral in total
@@ -486,16 +533,24 @@ export function buildCashProjection({
       })
     }
 
+    const recurringNetEUR = monthlyIncome - monthlyBurn
     const netChange = recurringNetEUR + events.reduce((s, e) => s + e.amountEUR, 0)
     balance = opening + netChange
 
-    // Distribute net change proportionally across per-account balances
-    if (opening > 0) {
+    let assignedDelta = 0
+    for (const [id, delta] of accountDeltaEUR) {
+      perAccountEUR.set(id, (perAccountEUR.get(id) ?? 0) + delta)
+      assignedDelta += delta
+    }
+    const unassignedChange = netChange - assignedDelta
+
+    // Distribute only flows without a configured account proportionally.
+    if (opening > 0 && unassignedChange !== 0) {
       for (const [id, bal] of perAccountEUR) {
-        perAccountEUR.set(id, bal + (bal / opening) * netChange)
+        perAccountEUR.set(id, bal + (bal / opening) * unassignedChange)
       }
-    } else if (cashAccounts.length > 0) {
-      const share = netChange / cashAccounts.length
+    } else if (cashAccounts.length > 0 && unassignedChange !== 0) {
+      const share = unassignedChange / cashAccounts.length
       for (const [id, bal] of perAccountEUR) {
         perAccountEUR.set(id, bal + share)
       }

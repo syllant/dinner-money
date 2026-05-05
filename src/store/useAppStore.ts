@@ -3,21 +3,20 @@ import { persist } from 'zustand/middleware'
 import type {
   UserProfile, Account, PensionEstimate, RealEstateEvent,
   Expense, Windfall, MonteCarloConfig, TaxConfig, SimulationResult,
-  QuarterlyPayment, MedicalCoverage, MedicalExpense, Transfer,
+  QuarterlyPayment, MedicalCoverage, MedicalExpense, Transfer, TaxSettlement,
 } from '../types'
 
 // ─── Default values ───────────────────────────────────────────────────────────
 
 const defaultProfile: UserProfile = {
-  birthYear: 1975,
-  spouseBirthYear: 1978,
+  birthYear: 1970,
+  spouseBirthYear: 1972,
   projectionEndAge: 90,
+  spouseProjectionEndAge: 90,
   baseCurrency: 'EUR',
-  residencyPeriods: [
-    { id: '1', startDate: '2026-07', endDate: null, country: 'FR' },
-  ],
-  cobraMonthlyUSD: 2100,
-  cobraEndDate: '2026-07',
+  residencyPeriods: [],
+  cobraMonthlyUSD: 0,
+  cobraEndDate: '',
 }
 
 const defaultMonteCarloConfig: MonteCarloConfig = {
@@ -30,6 +29,11 @@ const defaultMonteCarloConfig: MonteCarloConfig = {
   eurUsdVolatility: 8,
   numSimulations: 10000,
   successThreshold: 90,
+  frenchTaxRate: 17.2,
+  taxableWithdrawalShare: 60,
+  annualTaxAllowanceEUR: 0,
+  cashYieldMultiplier: 75,
+  fallbackUsdEurRate: 1.08,
 }
 
 const defaultQuarterlyPayments = (year: number): QuarterlyPayment[] => [
@@ -43,8 +47,18 @@ const defaultTaxConfig: TaxConfig = {
   usFederalEffectiveRate: 22,
   usCaliforniaEffectiveRate: 9.3,
   frCombinedEffectiveRate: 11,
+  taxProfile: {
+    federalFilingStatus: 'married_joint',
+    stateFilingStatus: 'married_joint',
+    federalItemizedDeductionsUSD: 0,
+    stateItemizedDeductionsUSD: 0,
+    franceHouseholdParts: 2,
+    franceDeductionEUR: 0,
+    franceSocialRate: 17.2,
+  },
   quarterlyPayments: defaultQuarterlyPayments(new Date().getFullYear()),
   stateQuarterlyPayments: defaultQuarterlyPayments(new Date().getFullYear()),
+  settlements: [],
 }
 
 // ─── Store interface ──────────────────────────────────────────────────────────
@@ -53,7 +67,12 @@ interface AppState {
   // Auth
   lmApiKey: string | null
   lmProxyUrl: string | null
-  avApiKey: string | null
+  tiingoApiKey: string | null
+  fredApiKey: string | null
+  snapTradeClientId: string | null
+  snapTradeConsumerKey: string | null
+  snapTradeUserId: string | null
+  snapTradeUserSecret: string | null
   // Config
   profile: UserProfile
   accounts: Account[]
@@ -66,10 +85,10 @@ interface AppState {
   medicalCoverages: MedicalCoverage[]
   medicalExpenses: MedicalExpense[]
   transfers: Transfer[]
-  // Dividend history from Alpha Vantage (persisted)
-  dividendHistory: Record<string, import('../lib/alphavantage').TickerDividend[]>
+  // Dividend history from Tiingo (persisted)
+  dividendHistory: Record<string, import('../lib/tiingo').TickerDividend[]>
   dividendSyncedAt: string | null
-  setTickerDividends: (ticker: string, dividends: import('../lib/alphavantage').TickerDividend[]) => void
+  setTickerDividends: (ticker: string, dividends: import('../lib/tiingo').TickerDividend[]) => void
   setDividendSyncedAt: (at: string) => void
   // Display preferences
   minTransactionEUR: number
@@ -80,7 +99,11 @@ interface AppState {
   // Actions
   setLmApiKey: (key: string | null) => void
   setLmProxyUrl: (url: string | null) => void
-  setAvApiKey: (key: string | null) => void
+  setTiingoApiKey: (key: string | null) => void
+  setFredApiKey: (key: string | null) => void
+  setSnapTradeClientId: (key: string | null) => void
+  setSnapTradeConsumerKey: (key: string | null) => void
+  setSnapTradeUser: (userId: string | null, userSecret: string | null) => void
   setProfile: (patch: Partial<UserProfile>) => void
   setAccounts: (accounts: Account[]) => void
   upsertAccount: (account: Account) => void
@@ -100,6 +123,8 @@ interface AppState {
   setTaxConfig: (patch: Partial<TaxConfig>) => void
   upsertQuarterlyPayment: (payment: QuarterlyPayment) => void
   upsertStatePayment: (payment: QuarterlyPayment) => void
+  upsertTaxSettlement: (settlement: TaxSettlement) => void
+  deleteTaxSettlement: (id: string) => void
   upsertMedicalCoverage: (coverage: MedicalCoverage) => void
   deleteMedicalCoverage: (id: string) => void
   upsertMedicalExpense: (expense: MedicalExpense) => void
@@ -118,7 +143,12 @@ export const useAppStore = create<AppState>()(
       // Initial state
       lmApiKey: null,
       lmProxyUrl: null,
-      avApiKey: null,
+      tiingoApiKey: null,
+      fredApiKey: null,
+      snapTradeClientId: null,
+      snapTradeConsumerKey: null,
+      snapTradeUserId: null,
+      snapTradeUserSecret: null,
       dividendHistory: {},
       dividendSyncedAt: null,
       profile: defaultProfile,
@@ -139,7 +169,11 @@ export const useAppStore = create<AppState>()(
       // Actions
       setLmApiKey: (key) => set({ lmApiKey: key }),
       setLmProxyUrl: (url) => set({ lmProxyUrl: url }),
-      setAvApiKey: (key) => set({ avApiKey: key }),
+      setTiingoApiKey: (key) => set({ tiingoApiKey: key }),
+      setFredApiKey: (key) => set({ fredApiKey: key }),
+      setSnapTradeClientId: (key) => set({ snapTradeClientId: key }),
+      setSnapTradeConsumerKey: (key) => set({ snapTradeConsumerKey: key }),
+      setSnapTradeUser: (userId, userSecret) => set({ snapTradeUserId: userId, snapTradeUserSecret: userSecret }),
       setTickerDividends: (ticker, dividends) =>
         set((s) => ({ dividendHistory: { ...s.dividendHistory, [ticker]: dividends } })),
       setDividendSyncedAt: (at) => set({ dividendSyncedAt: at }),
@@ -225,6 +259,22 @@ export const useAppStore = create<AppState>()(
               : [...(s.taxConfig.stateQuarterlyPayments ?? []), payment],
           },
         })),
+      upsertTaxSettlement: (settlement) =>
+        set((s) => ({
+          taxConfig: {
+            ...s.taxConfig,
+            settlements: (s.taxConfig.settlements ?? []).some(item => item.id === settlement.id)
+              ? (s.taxConfig.settlements ?? []).map(item => item.id === settlement.id ? settlement : item)
+              : [...(s.taxConfig.settlements ?? []), settlement],
+          },
+        })),
+      deleteTaxSettlement: (id) =>
+        set((s) => ({
+          taxConfig: {
+            ...s.taxConfig,
+            settlements: (s.taxConfig.settlements ?? []).filter(item => item.id !== id),
+          },
+        })),
 
       upsertMedicalCoverage: (coverage) =>
         set((s) => ({
@@ -263,6 +313,11 @@ export const useAppStore = create<AppState>()(
       partialize: (s) => ({
         lmApiKey: s.lmApiKey,
         lmProxyUrl: s.lmProxyUrl,
+        fredApiKey: s.fredApiKey,
+        snapTradeClientId: s.snapTradeClientId,
+        snapTradeConsumerKey: s.snapTradeConsumerKey,
+        snapTradeUserId: s.snapTradeUserId,
+        snapTradeUserSecret: s.snapTradeUserSecret,
         profile: s.profile,
         accounts: s.accounts,
         pensions: s.pensions,
@@ -272,18 +327,39 @@ export const useAppStore = create<AppState>()(
         monteCarloConfig: s.monteCarloConfig,
         taxConfig: {
           ...s.taxConfig,
+          taxProfile: s.taxConfig.taxProfile ?? defaultTaxConfig.taxProfile,
           // ensure stateQuarterlyPayments is always persisted even if missing from old data
           stateQuarterlyPayments: s.taxConfig.stateQuarterlyPayments ?? defaultQuarterlyPayments(new Date().getFullYear()),
+          settlements: s.taxConfig.settlements ?? [],
         },
         medicalCoverages: s.medicalCoverages,
         medicalExpenses: s.medicalExpenses,
         transfers: s.transfers,
         minTransactionEUR: s.minTransactionEUR,
-        avApiKey: s.avApiKey,
+        tiingoApiKey: s.tiingoApiKey,
         dividendHistory: s.dividendHistory,
         dividendSyncedAt: s.dividendSyncedAt,
       }),
       merge: (persistedState: any, currentState) => {
+        if (persistedState.avApiKey && !persistedState.tiingoApiKey) {
+          persistedState.tiingoApiKey = persistedState.avApiKey
+        }
+        delete persistedState.avApiKey
+        if (persistedState.profile && persistedState.profile.spouseProjectionEndAge == null) {
+          persistedState.profile.spouseProjectionEndAge = persistedState.profile.projectionEndAge ?? currentState.profile.spouseProjectionEndAge
+        }
+        if (persistedState.taxConfig) {
+          persistedState.taxConfig.taxProfile = {
+            ...currentState.taxConfig.taxProfile,
+            ...(persistedState.taxConfig.taxProfile ?? {}),
+          }
+        }
+        if (persistedState.accounts) {
+          persistedState.accounts = persistedState.accounts.map((account: any) => ({
+            ...account,
+            taxCountry: account.taxCountry ?? undefined,
+          }))
+        }
         if (persistedState.pensions) {
           persistedState.pensions = persistedState.pensions.map((p: any) => {
             if (p.monthlyAmount !== undefined) {
