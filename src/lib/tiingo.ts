@@ -188,6 +188,156 @@ function inferFrequencyDays(payments: TickerDividend[]): number {
   return avgGap < 45 ? 30 : avgGap < 136 ? 91 : avgGap < 273 ? 182 : 365
 }
 
+export interface DailyTickerReturn {
+  date: string
+  return: number
+}
+
+const DAILY_RETURN_CACHE_PREFIX = 'dinner-money:tiingo-daily-returns:'
+const DAILY_RETURN_TTL_MS = 60 * 60 * 1000 // 1 hour
+
+function dailyReturnCacheKey(ticker: string): string {
+  return `${DAILY_RETURN_CACHE_PREFIX}${ticker.toUpperCase()}`
+}
+
+interface CachedDailyReturns {
+  savedAt: number
+  data: DailyTickerReturn[]
+}
+
+function readDailyReturnCache(ticker: string, allowStale = false): DailyTickerReturn[] | null {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(dailyReturnCacheKey(ticker))
+    if (!raw) return null
+    const cached = JSON.parse(raw) as CachedDailyReturns
+    if (!Array.isArray(cached.data)) return null
+    if (!allowStale && Date.now() - cached.savedAt > DAILY_RETURN_TTL_MS) return null
+    return cached.data
+  } catch {
+    return null
+  }
+}
+
+function writeDailyReturnCache(ticker: string, data: DailyTickerReturn[]) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(dailyReturnCacheKey(ticker), JSON.stringify({ savedAt: Date.now(), data }))
+  } catch {}
+}
+
+export async function fetchRecentDailyReturns(
+  apiKey: string,
+  ticker: string,
+  days = 10,
+  proxyUrl?: string | null,
+): Promise<DailyTickerReturn[]> {
+  const cached = readDailyReturnCache(ticker)
+  if (cached) return cached
+
+  const start = new Date()
+  start.setDate(start.getDate() - days)
+  const params = new URLSearchParams({ startDate: start.toISOString().slice(0, 10), token: apiKey })
+  const url = tiingoUrl(`/tiingo/daily/${encodeURIComponent(ticker)}/prices`, params, proxyUrl)
+  try {
+    const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } })
+    if (res.status === 429) {
+      const stale = readDailyReturnCache(ticker, true)
+      if (stale) return stale
+      throw new TiingoRateLimitError(ticker.toUpperCase())
+    }
+    if (!res.ok) return []
+    const data = await res.json()
+    if (!Array.isArray(data)) return []
+    const sorted = (data as TiingoPriceRow[])
+      .map(row => ({ date: row.date?.slice(0, 10) ?? '', adjClose: Number(row.adjClose) }))
+      .filter(r => r.date && Number.isFinite(r.adjClose) && r.adjClose > 0)
+      .sort((a, b) => a.date.localeCompare(b.date))
+    const result: DailyTickerReturn[] = []
+    for (let i = 1; i < sorted.length; i++) {
+      result.push({ date: sorted[i].date, return: sorted[i].adjClose / sorted[i - 1].adjClose - 1 })
+    }
+    writeDailyReturnCache(ticker, result)
+    return result
+  } catch (err) {
+    if (err instanceof TiingoRateLimitError) throw err
+    return []
+  }
+}
+
+export interface DailyPricePoint {
+  date: string     // YYYY-MM-DD
+  adjClose: number
+}
+
+const DAILY_PRICE_CACHE_PREFIX = 'dinner-money:tiingo-daily:'
+const DAILY_PRICE_TTL_MS = 60 * 60 * 1000 // 1 hour
+
+function dailyPriceCacheKey(ticker: string, startDate: string): string {
+  return `${DAILY_PRICE_CACHE_PREFIX}${ticker.toUpperCase()}:${startDate}`
+}
+
+interface CachedDailyPrices {
+  savedAt: number
+  data: DailyPricePoint[]
+}
+
+function readDailyPriceCache(ticker: string, startDate: string, allowStale = false): DailyPricePoint[] | null {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(dailyPriceCacheKey(ticker, startDate))
+    if (!raw) return null
+    const cached = JSON.parse(raw) as CachedDailyPrices
+    if (!Array.isArray(cached.data)) return null
+    if (!allowStale && Date.now() - cached.savedAt > DAILY_PRICE_TTL_MS) return null
+    return cached.data
+  } catch {
+    return null
+  }
+}
+
+function writeDailyPriceCache(ticker: string, startDate: string, data: DailyPricePoint[]) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(dailyPriceCacheKey(ticker, startDate), JSON.stringify({ savedAt: Date.now(), data }))
+  } catch {}
+}
+
+export async function fetchDailyPrices(
+  apiKey: string,
+  ticker: string,
+  startDate: string,
+  proxyUrl?: string | null,
+): Promise<DailyPricePoint[]> {
+  const cached = readDailyPriceCache(ticker, startDate)
+  if (cached) return cached
+
+  const params = new URLSearchParams({ startDate, token: apiKey })
+  const url = tiingoUrl(`/tiingo/daily/${encodeURIComponent(ticker)}/prices`, params, proxyUrl)
+  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } })
+
+  if (res.status === 429) {
+    const stale = readDailyPriceCache(ticker, startDate, true)
+    if (stale) return stale
+    throw new TiingoRateLimitError(ticker.toUpperCase())
+  }
+  if (!res.ok) throw new Error(`Tiingo ${ticker} returned ${res.status}`)
+
+  const data = await res.json()
+  if (!Array.isArray(data)) {
+    const detail = typeof data?.detail === 'string' ? data.detail : 'Unexpected Tiingo response'
+    throw new Error(detail)
+  }
+
+  const points: DailyPricePoint[] = (data as TiingoPriceRow[])
+    .map(row => ({ date: row.date?.slice(0, 10) ?? '', adjClose: Number(row.adjClose) || 0 }))
+    .filter(p => p.date && p.adjClose > 0)
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  writeDailyPriceCache(ticker, startDate, points)
+  return points
+}
+
 export function projectDividends(
   ticker: string,
   history: TickerDividend[],
