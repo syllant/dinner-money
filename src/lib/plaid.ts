@@ -1,9 +1,14 @@
 import type { PlaidHolding, PlaidDividend, AssetAllocation, TaxLot, InvestmentEvent } from '../types'
+import { useAppStore } from '../store/useAppStore'
 
 async function plaidPost(proxyUrl: string, path: string, body: object): Promise<any> {
+  const workerSecret = useAppStore.getState().lmProxySecret
   const res = await fetch(`${proxyUrl.replace(/\/$/, '')}/plaid${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(workerSecret ? { 'X-Worker-Secret': workerSecret } : {}),
+    },
     body: JSON.stringify(body),
   })
   if (!res.ok) {

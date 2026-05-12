@@ -17,7 +17,7 @@ export function PlaidConnect({
   onUnlink: () => void
   onRefresh?: () => void
 }) {
-  const { lmProxyUrl } = useAppStore()
+  const { lmProxyUrl, lmProxySecret } = useAppStore()
   const [linkToken, setLinkToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -29,7 +29,10 @@ export function PlaidConnect({
     try {
       const res = await fetch(`${lmProxyUrl.replace(/\/$/, '')}/plaid/link/token/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(lmProxySecret ? { 'X-Worker-Secret': lmProxySecret } : {}),
+        },
         body: JSON.stringify({
           client_name: 'DinnerMoney',
           language: 'en',
@@ -59,7 +62,10 @@ export function PlaidConnect({
       try {
         const res = await fetch(`${lmProxyUrl!.replace(/\/$/, '')}/plaid/item/public_token/exchange`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(lmProxySecret ? { 'X-Worker-Secret': lmProxySecret } : {}),
+          },
           body: JSON.stringify({ public_token }),
         })
         if (!res.ok) {

@@ -42,6 +42,16 @@ export default {
 
     // --- PLAID ROUTING ---
     if (url.pathname.startsWith('/plaid/')) {
+      // Optional shared-secret gate: enforced when WORKER_SECRET env var is set.
+      // Set via: wrangler secret put WORKER_SECRET
+      const workerSecret = typeof env.WORKER_SECRET === 'string' ? env.WORKER_SECRET.trim() : ''
+      if (workerSecret && request.headers.get('X-Worker-Secret') !== workerSecret) {
+        return new Response(JSON.stringify({ error: 'UNAUTHORIZED' }), {
+          status: 401,
+          headers: { ...corsHeaders(), 'Content-Type': 'application/json' },
+        })
+      }
+
       const clientId = typeof env.PLAID_CLIENT_ID === 'string' ? env.PLAID_CLIENT_ID.trim() : ''
       const secret   = typeof env.PLAID_SECRET   === 'string' ? env.PLAID_SECRET.trim()   : ''
 

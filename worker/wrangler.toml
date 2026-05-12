@@ -18,3 +18,7 @@ mode = "smart"
 # Make sure PLAID_SECRET matches PLAID_ENV.
 # Verify with: curl https://<worker-url>/plaid/ping
 # Verify IBKR Flex proxy with: curl https://<worker-url>/ibkr-flex/ping
+#
+# Optional: protect the /plaid/* route with a shared secret.
+# Generate any random string, then set it in both the Worker and app Settings → Proxy secret.
+#   wrangler secret put WORKER_SECRET

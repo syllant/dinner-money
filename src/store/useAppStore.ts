@@ -67,6 +67,7 @@ interface AppState {
   // Auth
   lmApiKey: string | null
   lmProxyUrl: string | null
+  lmProxySecret: string | null
   tiingoApiKey: string | null
   fredApiKey: string | null
   ibkrFlexToken: string | null
@@ -104,6 +105,7 @@ interface AppState {
   // Actions
   setLmApiKey: (key: string | null) => void
   setLmProxyUrl: (url: string | null) => void
+  setLmProxySecret: (secret: string | null) => void
   setTiingoApiKey: (key: string | null) => void
   setFredApiKey: (key: string | null) => void
   setIbkrFlexToken: (key: string | null) => void
@@ -153,6 +155,7 @@ export const useAppStore = create<AppState>()(
       // Initial state
       lmApiKey: null,
       lmProxyUrl: null,
+      lmProxySecret: null,
       tiingoApiKey: null,
       fredApiKey: null,
       ibkrFlexToken: null,
@@ -178,6 +181,7 @@ export const useAppStore = create<AppState>()(
       // Actions
       setLmApiKey: (key) => set({ lmApiKey: key }),
       setLmProxyUrl: (url) => set({ lmProxyUrl: url }),
+      setLmProxySecret: (secret) => set({ lmProxySecret: secret }),
       setTiingoApiKey: (key) => set({ tiingoApiKey: key }),
       setFredApiKey: (key) => set({ fredApiKey: key }),
       setIbkrFlexToken: (key) => set({ ibkrFlexToken: key }),

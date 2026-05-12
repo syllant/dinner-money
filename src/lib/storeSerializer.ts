@@ -5,6 +5,7 @@ export function serializeStore(): string {
   return JSON.stringify({
     lmApiKey: s.lmApiKey,
     lmProxyUrl: s.lmProxyUrl,
+    lmProxySecret: s.lmProxySecret,
     tiingoApiKey: s.tiingoApiKey,
     fredApiKey: s.fredApiKey,
     ibkrFlexToken: s.ibkrFlexToken,
@@ -32,6 +33,7 @@ export function applyToStore(json: string): void {
   const s = useAppStore.getState()
   if (d.lmApiKey !== undefined) s.setLmApiKey(d.lmApiKey)
   if (d.lmProxyUrl !== undefined) s.setLmProxyUrl(d.lmProxyUrl)
+  if (d.lmProxySecret !== undefined) s.setLmProxySecret(d.lmProxySecret)
   if (d.tiingoApiKey !== undefined) s.setTiingoApiKey(d.tiingoApiKey)
   if (d.fredApiKey !== undefined) s.setFredApiKey(d.fredApiKey)
   if (d.ibkrFlexToken !== undefined) s.setIbkrFlexToken(d.ibkrFlexToken)

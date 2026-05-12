@@ -13,7 +13,7 @@ type ApiService = 'lunchmoney' | 'tiingo' | 'fred' | 'ibkr-flex'
 
 export default function Settings() {
   const {
-    lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl,
+    lmApiKey, setLmApiKey, lmProxyUrl, setLmProxyUrl, lmProxySecret, setLmProxySecret,
     minTransactionEUR, setMinTransactionEUR,
     tiingoApiKey, setTiingoApiKey,
     fredApiKey, setFredApiKey,
@@ -22,6 +22,7 @@ export default function Settings() {
   } = useAppStore()
   const [keyInput, setKeyInput] = useState(lmApiKey ?? '')
   const [proxyInput, setProxyInput] = useState(lmProxyUrl ?? '')
+  const [proxySecretInput, setProxySecretInput] = useState(lmProxySecret ?? '')
   const [tiingoKeyInput, setTiingoKeyInput] = useState(tiingoApiKey ?? '')
   const [fredKeyInput, setFredKeyInput] = useState(fredApiKey ?? '')
   const [ibkrFlexTokenInput, setIbkrFlexTokenInput] = useState(ibkrFlexToken ?? '')
@@ -329,6 +330,24 @@ export default function Settings() {
           {lmProxyUrl && (
             <div className="mt-1 text-[11px] text-green-600">✓ Proxy set: {lmProxyUrl}</div>
           )}
+          <div className="mt-3">
+            <label className="block text-[11.5px] text-gray-500 dark:text-gray-400 mb-1">
+              Proxy secret (optional — protects Plaid route)
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                className="flex-1 h-[34px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 text-[12.5px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                value={proxySecretInput}
+                onChange={(e) => setProxySecretInput(e.target.value)}
+                placeholder="matches WORKER_SECRET on the Cloudflare Worker"
+              />
+              <Button onClick={() => setLmProxySecret(proxySecretInput.trim() || null)}>Save</Button>
+            </div>
+            <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+              Set the same value via <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">wrangler secret put WORKER_SECRET</code> to restrict who can use your Plaid credentials.
+            </p>
+          </div>
         </section>
 
         <hr className="border-gray-200 dark:border-gray-700" />
