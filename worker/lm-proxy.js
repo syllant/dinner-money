@@ -1,12 +1,12 @@
 /**
- * DinnerMoney — LunchMoney, Plaid & SnapTrade CORS proxy
+ * DinnerMoney — LunchMoney, Plaid & IBKR Flex CORS proxy
  * Deploy as a Cloudflare Worker (free tier: 100k req/day).
  *
  * Routes:
  *   GET  /plaid/ping          → health check (confirms secrets are set, never reveals them)
  *   POST /plaid/*             → https://<PLAID_ENV>.plaid.com/* (injects PLAID_CLIENT_ID + PLAID_SECRET)
- *   GET  /snaptrade/ping      → health check + upstream status check
- *   *    /snaptrade/*         → https://api.snaptrade.com/api/v1/* (signed server-side)
+ *   GET  /ibkr-flex/ping      → health check
+ *   POST /ibkr-flex/query     → IBKR Flex Web Service request + statement polling
  *   GET  /tiingo/*            → https://api.tiingo.com/*
  *   GET  /fred/*              → https://api.stlouisfed.org/fred/*
  *   GET  /external?url=...    → allowlisted public market-data APIs
@@ -15,9 +15,6 @@
  * Required Worker secrets  (wrangler secret put <NAME>):
  *   PLAID_CLIENT_ID   — from Plaid dashboard → Team → Keys
  *   PLAID_SECRET      — environment-specific secret (sandbox / development / production)
- *   SNAPTRADE_CLIENT_ID
- *   SNAPTRADE_CONSUMER_KEY
- *
  * Optional Worker variable (wrangler.toml [vars] or secret):
  *   PLAID_ENV         — "sandbox" | "development" | "production"  (default: "production")
  *
@@ -25,7 +22,7 @@
  */
 
 const LM_TARGET = 'https://dev.lunchmoney.app'
-const SNAPTRADE_TARGET = 'https://api.snaptrade.com/api/v1'
+const IBKR_FLEX_BASE = 'https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService'
 
 function plaidBaseUrl(env) {
   const e = (env.PLAID_ENV ?? 'production').toLowerCase().trim()
@@ -102,41 +99,32 @@ export default {
       })
     }
 
-    // --- SNAPTRADE ROUTING ---
-    if (url.pathname.startsWith('/snaptrade/')) {
-      const credentials = snapTradeCredentials(request, env)
-
-      if (url.pathname === '/snaptrade/ping') {
-        if (!credentials.clientId || !credentials.consumerKey) {
-          return jsonResponse({
-            ok: false,
-            client_id_set: !!credentials.clientId,
-            consumer_key_set: !!credentials.consumerKey,
-            message: 'SNAPTRADE_CLIENT_ID or SNAPTRADE_CONSUMER_KEY is not configured. Add Worker secrets, or test with local Settings values.',
-          }, 200)
+    // --- IBKR FLEX ROUTING ---
+    if (url.pathname.startsWith('/ibkr-flex/')) {
+      if (url.pathname === '/ibkr-flex/ping') {
+        return jsonResponse({ ok: true, reachable: true, message: 'IBKR Flex proxy reachable' }, 200)
+      }
+      if (url.pathname === '/ibkr-flex/query' && request.method === 'POST') {
+        const body = await requestJson(request)
+        const token = typeof body.token === 'string' ? body.token.trim() : ''
+        const queryId = typeof body.queryId === 'string' ? body.queryId.trim() : ''
+        if (!token || !queryId) {
+          return jsonResponse({ error: 'IBKR_FLEX_CREDENTIALS_REQUIRED', message: 'IBKR Flex token and Query ID are required.' }, 400)
         }
-
-        const upstream = await signedSnapTradeFetch('/', request, url, credentials)
-        const upstreamBody = await upstream.json().catch(() => null)
-        return jsonResponse({
-          ok: upstream.ok,
-          client_id_set: true,
-          consumer_key_set: true,
-          upstream: upstreamBody,
-          message: upstream.ok ? undefined : `SnapTrade returned ${upstream.status}`,
-        }, upstream.ok ? 200 : upstream.status)
+        try {
+          const xml = await fetchIbkrFlexStatement(token, queryId)
+          return new Response(xml, {
+            status: 200,
+            headers: { ...corsHeaders(), 'Content-Type': 'application/xml; charset=utf-8' },
+          })
+        } catch (err) {
+          return jsonResponse({
+            error: 'IBKR_FLEX_ERROR',
+            message: err instanceof Error ? err.message : String(err),
+          }, 502)
+        }
       }
-
-      if (!credentials.clientId || !credentials.consumerKey) {
-        return jsonResponse({
-          error: 'SNAPTRADE_CREDENTIALS_NOT_SET',
-          message: 'SNAPTRADE_CLIENT_ID or SNAPTRADE_CONSUMER_KEY is not configured on this Cloudflare Worker.',
-        }, 500)
-      }
-
-      const snapPath = url.pathname.replace('/snaptrade', '') || '/'
-      const response = await signedSnapTradeFetch(snapPath, request, url, credentials)
-      return withCors(response)
+      return jsonResponse({ error: 'IBKR_FLEX_ROUTE_NOT_FOUND' }, 404)
     }
 
     // --- TIINGO ROUTING ---
@@ -190,46 +178,6 @@ export default {
   },
 }
 
-function snapTradeCredentials(request, env) {
-  const clientId = request.headers.get('X-SnapTrade-Client-Id')?.trim()
-    || (typeof env.SNAPTRADE_CLIENT_ID === 'string' ? env.SNAPTRADE_CLIENT_ID.trim() : '')
-  const consumerKey = request.headers.get('X-SnapTrade-Consumer-Key')?.trim()
-    || (typeof env.SNAPTRADE_CONSUMER_KEY === 'string' ? env.SNAPTRADE_CONSUMER_KEY.trim() : '')
-  return { clientId, consumerKey }
-}
-
-async function signedSnapTradeFetch(snapPath, request, requestUrl, credentials) {
-  const method = request.method.toUpperCase()
-  const content = await requestJson(request)
-  const targetUrl = new URL(SNAPTRADE_TARGET + snapPath)
-  const timestamp = Math.floor(Date.now() / 1000).toString()
-  const queryPairs = [
-    ['clientId', credentials.clientId],
-    ['timestamp', timestamp],
-    ...[...requestUrl.searchParams.entries()]
-      .filter(([key]) => key !== 'clientId' && key !== 'timestamp' && key !== 'signature'),
-  ]
-  const unsignedQuery = queryPairs.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&')
-  const requestPath = `/api/v1${snapPath}`
-  const signature = await snapTradeSignature(credentials.consumerKey, {
-    content: Object.keys(content).length === 0 ? null : content,
-    path: requestPath,
-    query: unsignedQuery,
-  })
-  targetUrl.search = unsignedQuery
-
-  const headers = new Headers()
-  headers.set('Accept', 'application/json')
-  headers.set('Signature', signature)
-  if (!['GET', 'HEAD'].includes(method)) headers.set('Content-Type', 'application/json')
-
-  return fetch(new Request(targetUrl.toString(), {
-    method,
-    headers,
-    body: ['GET', 'HEAD'].includes(method) ? undefined : JSON.stringify(content),
-  }))
-}
-
 async function requestJson(request) {
   if (['GET', 'HEAD'].includes(request.method.toUpperCase())) return {}
   try {
@@ -239,32 +187,73 @@ async function requestJson(request) {
   }
 }
 
-async function snapTradeSignature(consumerKey, signatureObject) {
-  const encodedKey = encodeURI(consumerKey)
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(encodedKey),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
-  const sigContent = jsonStringifyOrdered(signatureObject)
-  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(sigContent))
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+async function fetchIbkrFlexStatement(token, queryId) {
+  const requestUrl = new URL(`${IBKR_FLEX_BASE}/SendRequest`)
+  requestUrl.searchParams.set('t', token)
+  requestUrl.searchParams.set('q', queryId)
+  requestUrl.searchParams.set('v', '3')
+
+  const requestXml = await fetchText(requestUrl.toString())
+  const requestStatus = xmlValue(requestXml, 'Status')
+  if (requestStatus && requestStatus.toLowerCase() !== 'success') {
+    throw new Error(xmlValue(requestXml, 'ErrorMessage') || xmlValue(requestXml, 'Error') || `IBKR Flex request failed: ${requestStatus}`)
+  }
+  const referenceCode = xmlValue(requestXml, 'ReferenceCode')
+  if (!referenceCode) throw new Error('IBKR Flex did not return a reference code.')
+
+  const statementUrl = new URL(`${IBKR_FLEX_BASE}/GetStatement`)
+  statementUrl.searchParams.set('t', token)
+  statementUrl.searchParams.set('q', referenceCode)
+  statementUrl.searchParams.set('v', '3')
+
+  let lastXml = ''
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (attempt > 0) await sleep(attempt < 4 ? 1500 : 3000)
+    lastXml = await fetchText(statementUrl.toString())
+    const status = xmlValue(lastXml, 'Status')
+    if (!status || status.toLowerCase() === 'success') return lastXml
+    const code = xmlValue(lastXml, 'ErrorCode')
+    const message = xmlValue(lastXml, 'ErrorMessage') || xmlValue(lastXml, 'Error')
+    if (code === '1019' || /statement.*not.*ready|temporarily unavailable|pending/i.test(message ?? status)) continue
+    throw new Error(message || `IBKR Flex statement failed: ${status}`)
+  }
+  throw new Error(xmlValue(lastXml, 'ErrorMessage') || 'IBKR Flex statement was not ready after polling.')
 }
 
-function jsonStringifyOrdered(obj) {
-  const allKeys = []
-  const seen = {}
-  JSON.stringify(obj, (key, value) => {
-    if (!(key in seen)) {
-      allKeys.push(key)
-      seen[key] = null
-    }
-    return value
+async function fetchText(targetUrl) {
+  const response = await fetch(targetUrl, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/xml,text/xml,*/*',
+      'User-Agent': 'DinnerMoney/1.0 (+https://github.com)',
+    },
   })
-  allKeys.sort()
-  return JSON.stringify(obj, allKeys)
+  const text = await response.text()
+  if (!response.ok) {
+    const hint = response.status === 403
+      ? ' IBKR requires a User-Agent header; redeploy the updated Worker if this persists.'
+      : ''
+    throw new Error(`IBKR Flex returned ${response.status}: ${text.slice(0, 200)}${hint}`)
+  }
+  return text
+}
+
+function xmlValue(xml, tagName) {
+  const match = xml.match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i'))
+  return match ? decodeXml(match[1].trim()) : ''
+}
+
+function decodeXml(value) {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function jsonResponse(body, status) {
@@ -338,7 +327,7 @@ function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-SnapTrade-Client-Id, X-SnapTrade-Consumer-Key',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     'Access-Control-Max-Age': '86400',
   }
 }

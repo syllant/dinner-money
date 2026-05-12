@@ -13,10 +13,8 @@ mode = "smart"
 # Required secrets — set once per environment via CLI:
 #   wrangler secret put PLAID_CLIENT_ID
 #   wrangler secret put PLAID_SECRET
-#   wrangler secret put SNAPTRADE_CLIENT_ID
-#   wrangler secret put SNAPTRADE_CONSUMER_KEY
 #
 # Each Plaid environment (sandbox / development / production) has its own secret.
 # Make sure PLAID_SECRET matches PLAID_ENV.
 # Verify with: curl https://<worker-url>/plaid/ping
-# Verify SnapTrade with: curl https://<worker-url>/snaptrade/ping
+# Verify IBKR Flex proxy with: curl https://<worker-url>/ibkr-flex/ping

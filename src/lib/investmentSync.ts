@@ -6,10 +6,12 @@ export async function syncPlaidInvestmentAccount(account: Account, proxyUrl: str
   const holdings = await fetchPlaidHoldings(proxyUrl, account.plaidAccessToken)
   const allocation = computeAllocationFromHoldings(holdings)
   let dividends = account.dividends
+  let investmentEvents = account.investmentEvents
   let annotatedHoldings = holdings
   try {
     const txData = await fetchPlaidInvestmentData(proxyUrl, account.plaidAccessToken)
     dividends = txData.dividends
+    investmentEvents = txData.investmentEvents
     annotatedHoldings = holdings.map(holding => ({
       ...holding,
       purchaseDate: holding.ticker ? txData.buyDates[holding.ticker] ?? undefined : undefined,
@@ -23,6 +25,7 @@ export async function syncPlaidInvestmentAccount(account: Account, proxyUrl: str
     taxLots: derivePlaidTaxLots(annotatedHoldings),
     allocation,
     dividends,
+    investmentEvents,
   }
 }
 

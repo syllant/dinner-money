@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { Banner } from '../../components/ui/Banner'
@@ -7,7 +7,6 @@ import { Badge } from '../../components/ui/Badge'
 import { InfoTooltip } from '../../components/ui/InfoTooltip'
 import { SortBtn, useSort } from '../../components/ui/SortBtn'
 import { formatCurrency } from '../../lib/format'
-import { NumericInput } from '../../components/ui/NumericInput'
 import { PlaidConnect } from '../../components/PlaidConnect'
 import { syncPlaidInvestmentAccount } from '../../lib/investmentSync'
 import { fetchIbkrFlexXml, parseIbkrFlexAccountIds, syncIbkrFlexAccounts } from '../../lib/ibkrFlex'
@@ -15,6 +14,185 @@ import { EditIcon } from '../../components/ui/Icons'
 import { CUR_BADGE, curBadgeClass, curSymbol } from '../../components/ui/FrequencyDisplay'
 import type { Account, Country } from '../../types'
 import type { TaxLot } from '../../types'
+
+// ─── NAV history import ────────────────────────────────────────────────────────
+
+interface NavRow { date: string; value: number }
+
+function tryParseDate(s: string): string | null {
+  s = s.trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
+  return null
+}
+
+function tryParseNumber(s: string): number | null {
+  const n = parseFloat(s.replace(/[$€£,\s]/g, ''))
+  return isNaN(n) || !isFinite(n) ? null : n
+}
+
+function parseNavCsv(text: string): NavRow[] {
+  const rows: NavRow[] = []
+  for (const rawLine of text.trim().split(/\r?\n/)) {
+    const cells = rawLine.split(/[,\t]/).map(c => c.trim().replace(/^"|"$/g, ''))
+    let date: string | null = null
+    let value: number | null = null
+    for (const cell of cells) {
+      if (!date) { date = tryParseDate(cell); continue }
+      if (value === null) { value = tryParseNumber(cell); if (value !== null) break }
+    }
+    if (date && value !== null && value > 0) rows.push({ date, value })
+  }
+  return rows.sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function NavImportModal({ account, onClose }: {
+  account: { id: number; name: string; currency: string; navHistory?: NavRow[] }
+  onClose: () => void
+}) {
+  const mergeNavHistory = useAppStore(s => s.mergeNavHistory)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [rows, setRows] = useState<NavRow[]>([])
+  const [fileName, setFileName] = useState<string | null>(null)
+  const [parseError, setParseError] = useState<string | null>(null)
+  const [imported, setImported] = useState(false)
+
+  const existingDates = new Set((account.navHistory ?? []).map(p => p.date))
+  const newRows = rows.filter(r => !existingDates.has(r.date))
+  const skippedRows = rows.filter(r => existingDates.has(r.date))
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    setImported(false)
+    setParseError(null)
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const text = ev.target?.result as string
+      const parsed = parseNavCsv(text)
+      if (parsed.length === 0) {
+        setParseError('No valid rows found. Each line must have a date and a number.')
+        setRows([])
+      } else {
+        setRows(parsed)
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  function handleImport() {
+    if (newRows.length === 0) return
+    mergeNavHistory(account.id, newRows)
+    setImported(true)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]" onMouseDown={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
+          <div>
+            <div className="text-[13px] font-semibold text-gray-900 dark:text-white">Import NAV history</div>
+            <div className="text-[11px] text-gray-400 mt-0.5">{account.name}</div>
+          </div>
+          <button onClick={onClose} className="h-[28px] px-2 rounded-[5px] text-[11px] font-medium text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800">Close</button>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
+          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 leading-relaxed">
+            Select a CSV file with a <strong>date</strong> and <strong>total portfolio value</strong> column.
+            Dates: <code className="text-[10.5px] bg-gray-100 dark:bg-gray-800 px-1 rounded">YYYY-MM-DD</code> or <code className="text-[10.5px] bg-gray-100 dark:bg-gray-800 px-1 rounded">MM/DD/YYYY</code>.
+            Values in <strong>{account.currency.toUpperCase()}</strong>. Headers are skipped automatically.
+            Existing IBKR dates are never overwritten.
+          </p>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="text-[11.5px] px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            >
+              {fileName ? 'Change file…' : 'Choose file…'}
+            </button>
+            {fileName && <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate">{fileName}</span>}
+            <input ref={fileInputRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFile} />
+          </div>
+
+          {parseError && (
+            <div className="text-[11.5px] text-amber-600 dark:text-amber-400">{parseError}</div>
+          )}
+
+          {rows.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-3 text-[11px]">
+                <span className="text-green-600 dark:text-green-400">{newRows.length} new row{newRows.length !== 1 ? 's' : ''}</span>
+                {skippedRows.length > 0 && (
+                  <span className="text-gray-400">{skippedRows.length} skipped (date already exists)</span>
+                )}
+              </div>
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="flex text-[9.5px] font-medium text-gray-400 uppercase tracking-wider px-3 py-1.5 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                  <span className="flex-1">Date</span>
+                  <span className="text-right">Value ({account.currency.toUpperCase()})</span>
+                  <span className="w-16 text-right">Status</span>
+                </div>
+                <div className="max-h-48 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                  {rows.map((r, i) => {
+                    const isNew = !existingDates.has(r.date)
+                    return (
+                      <div key={i} className="flex items-center px-3 py-[5px] text-[11px]">
+                        <span className="flex-1 font-mono text-gray-700 dark:text-gray-300">{r.date}</span>
+                        <span className="font-mono text-gray-700 dark:text-gray-300">
+                          {r.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        <span className={`w-16 text-right text-[10px] ${isNew ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}>
+                          {isNew ? 'import' : 'skip'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {imported && (
+            <div className="text-[11.5px] text-green-600 dark:text-green-400">
+              {newRows.length} rows imported into {account.name}.
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700 shrink-0">
+          {imported ? (
+            <button
+              onClick={onClose}
+              className="text-[11.5px] px-4 py-1.5 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 transition-colors"
+            >
+              Close
+            </button>
+          ) : (
+            <>
+              <button onClick={onClose} className="text-[11.5px] px-3 py-1.5 rounded-lg text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={newRows.length === 0}
+                className="text-[11.5px] px-4 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Import {newRows.length > 0 ? `${newRows.length} row${newRows.length !== 1 ? 's' : ''}` : ''}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 
 type BadgeVariant = 'eur' | 'usd' | 'fr' | 'us' | 'success' | 'warning' | 'info' | 'purple' | 'neutral'
 
@@ -234,6 +412,7 @@ export default function Accounts() {
     lmApiKey, lmProxyUrl, accounts, setAccounts, upsertAccount,
     ibkrFlexToken, ibkrFlexQueryId,
   } = useAppStore()
+  const [navImportAccount, setNavImportAccount] = useState<Account | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncAccountId, setSyncAccountId] = useState<number | null>(null)
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
@@ -459,7 +638,12 @@ export default function Accounts() {
                       {acc.typeOverridden && <span className="ml-1 opacity-60">✎</span>}
                     </Badge>
                   </span>
-                  <div className="flex justify-end">
+                  <div className="flex justify-end items-center gap-1.5">
+                    {(acc.type === 'investment' || acc.type === 'retirement') && acc.navHistory && acc.navHistory.length > 0 && (
+                      <span className="text-[9.5px] text-gray-400 tabular-nums whitespace-nowrap">
+                        {'from ' + acc.navHistory.reduce((min, r) => r.date < min ? r.date : min, acc.navHistory[0].date).slice(0, 7)}
+                      </span>
+                    )}
                     <button className="text-[11px] cursor-pointer transition-colors text-gray-400 hover:text-blue-500" onClick={() => setEditing(acc)}>
                       <EditIcon />
                     </button>
@@ -469,11 +653,6 @@ export default function Accounts() {
                 {isEditing && (
                   <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700/60 space-y-4">
                     <div className="flex items-center gap-4 flex-wrap">
-                      <label className="flex items-center gap-2 cursor-pointer text-[12px] font-medium text-gray-700 dark:text-gray-300">
-                        <input type="checkbox" checked={eAcc.includedInPlanning !== false} onChange={e => setEditing({ ...eAcc, includedInPlanning: e.target.checked })} className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-                        Include in planning & cash flow
-                      </label>
-                      <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 shrink-0" />
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-gray-500">Type</span>
                         <select className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800" value={eAcc.type} onChange={e => setEditing({ ...eAcc, type: e.target.value as Account['type'], typeOverridden: true })}>
@@ -501,13 +680,20 @@ export default function Accounts() {
                           <CharacteristicsEdit acc={eAcc} onUpdate={patch => setEditing({ ...eAcc, ...patch })} />
                         </>
                       )}
+                      <label className="ml-auto flex items-center gap-1.5 cursor-pointer text-[11px] text-gray-500 dark:text-gray-400">
+                        <input
+                          type="checkbox"
+                          checked={eAcc.includedInPlanning === false}
+                          onChange={e => setEditing({ ...eAcc, includedInPlanning: e.target.checked ? false : undefined })}
+                          className="rounded border-gray-300 focus:ring-gray-400"
+                        />
+                        Ignore
+                      </label>
                     </div>
 
                     {(eAcc.type === 'investment' || eAcc.type === 'retirement') && (() => {
                       const ibkrLinked = !!eAcc.ibkrAccountId?.trim()
                       const plaidLinked = !!eAcc.plaidAccessToken
-                      const lots = accountDisplayLots(eAcc)
-                      const cashCount = lots.filter(lot => lot.isCash).length
                       const assignedIbkrIds = new Set(
                         accounts
                           .filter(account => account.id !== eAcc.id)
@@ -572,10 +758,17 @@ export default function Accounts() {
                                 onRefresh={plaidLinked ? () => syncSinglePlaid(eAcc.id, eAcc.plaidAccessToken!) : undefined}
                               />
                               {!showIbkr && (
-                                <button type="button" onClick={() => setShowIbkr(true)} className="ml-auto text-[10.5px] px-2 py-0.5 rounded border border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                                <button type="button" onClick={() => setShowIbkr(true)} className="text-[10.5px] px-2 py-0.5 rounded border border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20">
                                   Use IBKR
                                 </button>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => setNavImportAccount(eAcc)}
+                                className="ml-auto text-[10.5px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400 transition-colors"
+                              >
+                                Import past history…
+                              </button>
                             </div>
                           </div>
 
@@ -652,92 +845,6 @@ export default function Accounts() {
                             </div>
                           )}
 
-                          {!ibkrLinked && eAcc.currency.toUpperCase() !== 'EUR' && (eAcc.holdings?.length ?? 0) > 0 && (() => {
-                            const curUSDHolding = eAcc.holdings?.find(h => h.ticker === 'CUR:USD')
-                            const currentRef = curUSDHolding ? curUSDHolding.institutionValue : eAcc.balance
-                            const hasChanged = eAcc.fxSplitEUR != null && eAcc.fxSplitEUR > 0
-                              && eAcc.fxSplitEURRef != null
-                              && Math.abs(currentRef - eAcc.fxSplitEURRef) / Math.max(1, eAcc.fxSplitEURRef) > 0.01
-                            return (
-                              <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-2.5 py-2 bg-gray-50/50 dark:bg-gray-800/40">
-                                <div className="flex items-center gap-2 text-[11px] flex-wrap">
-                                  <span className="text-gray-700 dark:text-gray-300">EUR portion of USD position:</span>
-                                  <NumericInput
-                                    className="w-24 h-[24px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800 text-[11px]"
-                                    placeholder="0"
-                                    value={eAcc.fxSplitEUR ?? null}
-                                    onChange={val => setEditing({ ...eAcc, fxSplitEUR: val, fxSplitEURRef: val != null ? currentRef : undefined })}
-                                  />
-                                  <span className="text-gray-500 dark:text-gray-400 italic">(useful when the provider consolidates all cash in USD)</span>
-                                </div>
-                                {hasChanged && (
-                                  <div className="mt-1.5 text-amber-600 dark:text-amber-400 text-[10.5px]">
-                                    ⚠ CUR:USD position changed ({formatCurrency(eAcc.fxSplitEURRef!, 'USD')} → {formatCurrency(currentRef, 'USD')}) — verify the EUR amount is still accurate
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })()}
-
-                          {lots.length > 0 && (() => {
-                            const totals = lots.reduce((t, lot) => {
-                              t.value += lot.marketValue
-                              if (lot.costBasis != null) { t.cost += lot.costBasis; t.hasCost = true }
-                              return t
-                            }, { value: 0, cost: 0, hasCost: false })
-                            const totalGain = totals.hasCost ? totals.value - totals.cost : null
-                            const currency = lots[0]?.currency ?? eAcc.currency
-                            return (
-                              <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/40 overflow-hidden">
-                                <div className="px-3 py-1.5 text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-[0.05em]">
-                                  Tax lots{cashCount > 0 ? ' + cash' : ''} — {lots.length}
-                                </div>
-                                <div className="overflow-y-auto" style={{ maxHeight: '180px' }}>
-                                  <table className="w-full text-[10.5px]">
-                                    <thead className="sticky top-0 bg-gray-100 dark:bg-gray-700/80 text-gray-500 dark:text-gray-400">
-                                      <tr>
-                                        <th className="text-left font-medium px-3 py-1">Ticker / Name</th>
-                                        <th className="text-right font-medium px-2 py-1">Value</th>
-                                        <th className="text-right font-medium px-2 py-1">Cost</th>
-                                        <th className="text-right font-medium px-2 py-1">Gain</th>
-                                        <th className="text-left font-medium px-2 py-1">Acquired</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {lots.map(lot => {
-                                        const gain = lot.costBasis != null ? lot.marketValue - lot.costBasis : null
-                                        return (
-                                          <tr key={lot.id} className="border-t border-gray-100 dark:border-gray-800">
-                                            <td className="px-3 py-1">
-                                              <span className="font-medium">{lot.ticker ?? lot.name}</span>
-                                              {lot.ticker && <span className="ml-1.5 text-gray-400 dark:text-gray-500">{lot.name}</span>}
-                                            </td>
-                                            <td className="px-2 py-1 text-right tabular-nums">{formatCurrency(lot.marketValue, lot.currency)}</td>
-                                            <td className="px-2 py-1 text-right tabular-nums">{lot.costBasis != null ? formatCurrency(lot.costBasis, lot.currency) : '—'}</td>
-                                            <td className={`px-2 py-1 text-right tabular-nums ${gain == null ? 'text-gray-400' : gain >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
-                                              {gain != null ? formatCurrency(gain, lot.currency) : '—'}
-                                            </td>
-                                            <td className="px-2 py-1 text-gray-500 dark:text-gray-400">{lot.isCash ? 'Cash' : lot.acquiredDate ?? '—'}</td>
-                                          </tr>
-                                        )
-                                      })}
-                                    </tbody>
-                                    <tfoot className="sticky bottom-0 bg-gray-100 dark:bg-gray-700/80 border-t border-gray-200 dark:border-gray-700 font-semibold">
-                                      <tr>
-                                        <td className="px-3 py-1">Total</td>
-                                        <td className="px-2 py-1 text-right tabular-nums">{formatCurrency(totals.value, currency)}</td>
-                                        <td className="px-2 py-1 text-right tabular-nums">{totals.hasCost ? formatCurrency(totals.cost, currency) : '—'}</td>
-                                        <td className={`px-2 py-1 text-right tabular-nums ${totalGain == null ? 'text-gray-400' : totalGain >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`}>
-                                          {totalGain != null ? formatCurrency(totalGain, currency) : '—'}
-                                        </td>
-                                        <td className="px-2 py-1" />
-                                      </tr>
-                                    </tfoot>
-                                  </table>
-                                </div>
-                              </div>
-                            )
-                          })()}
                         </div>
                       )
                     })()}
@@ -756,6 +863,9 @@ export default function Accounts() {
       </div>
       {lotDetailsAccount && (
         <TaxLotsModal account={lotDetailsAccount} onClose={() => setLotDetailsAccount(null)} />
+      )}
+      {navImportAccount && (
+        <NavImportModal account={navImportAccount} onClose={() => setNavImportAccount(null)} />
       )}
     </div>
   )

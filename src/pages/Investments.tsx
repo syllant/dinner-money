@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { ResponsiveContainer, Treemap, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RCTooltip, ReferenceLine } from 'recharts'
+import { ResponsiveContainer, Treemap, LineChart, AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip as RCTooltip, ReferenceLine } from 'recharts'
 import { RefreshCw } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -10,16 +10,16 @@ import { formatCompact, formatCurrency } from '../lib/format'
 import { convertToBase, DEFAULT_EUR_USD_RATE } from '../lib/currency'
 import { projectedAnnualDividendsEUR } from '../lib/dividends'
 import { projectedAccountsBy } from '../lib/accountLifecycle'
-import { fetchTickerDividends, projectDividends, fetchMonthlyAdjustedReturns, fetchRecentDailyReturns } from '../lib/tiingo'
+import { fetchTickerDividends, projectDividends, fetchMonthlyAdjustedReturns, fetchRecentDailyReturns, TiingoRateLimitError } from '../lib/tiingo'
 import type { MonthlyTickerReturn, DailyTickerReturn } from '../lib/tiingo'
 import { syncIbkrFlexAccounts } from '../lib/ibkrFlex'
 import { syncPlaidInvestmentAccount } from '../lib/investmentSync'
-import type { Currency } from '../types'
+import type { Currency, Account } from '../types'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
-type HistRangeKey = '1d' | '1w' | '1m' | '3M' | '1Y' | '2Y' | '3Y' | '5Y' | 'All'
-const HIST_RANGES: HistRangeKey[] = ['1d', '1w', '1m', '3M', '1Y', '2Y', '3Y', '5Y', 'All']
+type HistRangeKey = '1d' | '1w' | '1M' | '3M' | '1Y' | '2Y' | '3Y' | '5Y' | 'All'
+const HIST_RANGES: HistRangeKey[] = ['1d', '1w', '1M', '3M', '1Y', '2Y', '3Y', '5Y', 'All']
 
 type TreemapView = 'positions' | 'allocation' | 'currency' | 'gains'
 
@@ -107,6 +107,7 @@ const ALLOC_COLORS: Record<string, string> = {
 }
 
 const CURRENCY_PALETTE = ['#378ADD', '#22c55e', '#f59e0b', '#a78bfa', '#34d399', '#94a3b8']
+const STACK_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a78bfa', '#f43f5e', '#06b6d4', '#f59e0b', '#8b5cf6']
 function currencyColor(cur: string, idx: number): string {
   const explicit: Record<string, string> = { USD: '#378ADD', EUR: '#22c55e', GBP: '#f59e0b' }
   return explicit[cur] ?? CURRENCY_PALETTE[idx % CURRENCY_PALETTE.length]
@@ -161,7 +162,7 @@ function fmtChartDate(dateStr: string): string {
 function histStartMonthFor(range: HistRangeKey, today: Date): string {
   if (range === 'All') return '2000-01'
   const d = new Date(today)
-  const mo: Record<HistRangeKey, number> = { '1d': 0, '1w': 0, '1m': 0, '3M': 3, '1Y': 12, '2Y': 24, '3Y': 36, '5Y': 60, 'All': 0 }
+  const mo: Record<HistRangeKey, number> = { '1d': 0, '1w': 0, '1M': 0, '3M': 3, '1Y': 12, '2Y': 24, '3Y': 36, '5Y': 60, 'All': 0 }
   d.setMonth(d.getMonth() - mo[range])
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
@@ -192,6 +193,94 @@ function ProviderDot({ healthy }: { healthy: boolean }) {
   return <span className={`h-1.5 w-1.5 rounded-full ${healthy ? 'bg-green-500' : 'bg-red-500'}`} />
 }
 
+// ─── Account filter dropdown ────────────────────────────────────────────────────
+
+function AccountFilter({
+  accounts,
+  selectedIds,
+  onChange,
+}: {
+  accounts: Account[]
+  selectedIds: Set<number> | null
+  onChange: (ids: Set<number> | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handle(e: MouseEvent) {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [open])
+
+  const allSelected = selectedIds === null
+  const label = allSelected
+    ? 'All accounts'
+    : accounts
+        .filter(a => selectedIds.has(a.id))
+        .map(a => a.name)
+        .join(', ') || 'None'
+
+  function toggle(id: number) {
+    const current = selectedIds ?? new Set(accounts.map(a => a.id))
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    if (next.size === 0) return
+    onChange(next.size === accounts.length ? null : next)
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1 text-[10.5px] px-2 py-[3px] rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600 transition-colors max-w-[200px]"
+      >
+        <span className="truncate">{label}</span>
+        <span className="shrink-0 text-gray-400 ml-0.5">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="absolute z-30 left-0 top-full mt-1 min-w-[220px] bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-[7px] shadow-xl py-1">
+          <label className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={() => onChange(null)}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-[11px] font-medium text-gray-700 dark:text-gray-300">All accounts</span>
+          </label>
+          <div className="border-t border-gray-100 dark:border-gray-800 my-1" />
+          {accounts.map(a => {
+            const checked = selectedIds === null || selectedIds.has(a.id)
+            const firstDate = a.navHistory?.length
+              ? a.navHistory.reduce((min, r) => r.date < min ? r.date : min, a.navHistory[0].date)
+              : null
+            return (
+              <label key={a.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(a.id)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-[11px] text-gray-700 dark:text-gray-300 flex-1 truncate">{a.name}</span>
+                {firstDate && (
+                  <span className="text-[9.5px] text-gray-400 tabular-nums shrink-0">from {firstDate.slice(0, 7)}</span>
+                )}
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Investments() {
@@ -217,9 +306,23 @@ export default function Investments() {
   const [portfolioSyncMsg, setPortfolioSyncMsg] = useState<string | null>(null)
   const [showTableView, setShowTableView] = useState(false)
   const [dailyReturnsMap, setDailyReturnsMap] = useState<Map<string, DailyTickerReturn[]>>(new Map())
-  const [historyRange, setHistoryRange] = useState<HistRangeKey>('2Y')
-  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number> | null>(null)
-  const [chartMode, setChartMode] = useState<'$' | '%'>('$')
+  const [historyRange, setHistoryRange] = useState<HistRangeKey>(() =>
+    (localStorage.getItem('dinner-money:perf-range') as HistRangeKey | null) ?? '2Y'
+  )
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number> | null>(() => {
+    const raw = localStorage.getItem('dinner-money:perf-accounts')
+    if (!raw || raw === 'all') return null
+    try { return new Set(JSON.parse(raw) as number[]) } catch { return null }
+  })
+  const [chartMode, setChartMode] = useState<'$' | '%'>(() =>
+    (localStorage.getItem('dinner-money:perf-mode') as '$' | '%' | null) ?? '$'
+  )
+
+  useEffect(() => { localStorage.setItem('dinner-money:perf-range', historyRange) }, [historyRange])
+  useEffect(() => {
+    localStorage.setItem('dinner-money:perf-accounts', selectedAccountIds === null ? 'all' : JSON.stringify([...selectedAccountIds]))
+  }, [selectedAccountIds])
+  useEffect(() => { localStorage.setItem('dinner-money:perf-mode', chartMode) }, [chartMode])
   const [hoveredHolding, setHoveredHolding] = useState<{
     ticker: string; fullName: string; value: number; gains: number | null
     nativeCurrency: string; nativeValue: number; nativeGains: number | null
@@ -227,6 +330,7 @@ export default function Investments() {
   } | null>(null)
   const [treemapPos, setTreemapPos] = useState({ x: 0, y: 0 })
   const [perfReturnsMap, setPerfReturnsMap] = useState<Map<string, MonthlyTickerReturn[]>>(new Map())
+  const [tiingoRateLimited, setTiingoRateLimited] = useState(false)
 
   // ── Included accounts ──
 
@@ -668,11 +772,13 @@ export default function Investments() {
     return [...tickerMap.entries()].map(([ticker, { value, startMonth }]) => ({ ticker, value, startMonth }))
   }, [selectedAccountIds, perAccountPerfHoldings, perfHoldings])
 
-  const portfolioYtd = weightedPortfolioReturn(filteredPerfHoldings, perfReturnsMap, ytdStartMonth, currentMonth)
-  const portfolio12m = weightedPortfolioReturn(filteredPerfHoldings, perfReturnsMap, year12StartMonth, currentMonth)
+  // Indicators always use full unfiltered perfHoldings — account filter is chart-only
+  const portfolioYtd = weightedPortfolioReturn(perfHoldings, perfReturnsMap, ytdStartMonth, currentMonth)
+  const portfolio12m = weightedPortfolioReturn(perfHoldings, perfReturnsMap, year12StartMonth, currentMonth)
   const spyReturns = perfReturnsMap.get('SPY') ?? []
   const spyYtd = spyReturns.length > 0 ? compoundReturns(spyReturns, ytdStartMonth, currentMonth) : null
   const spy12m = spyReturns.length > 0 ? compoundReturns(spyReturns, year12StartMonth, currentMonth) : null
+  const spyAll = spyReturns.length > 0 ? compoundReturns(spyReturns, spyReturns[0].month, currentMonth) : null
 
   const todayData = useMemo(() => {
     if (dailyReturnsMap.size === 0) return { pct: null as number | null, spy: null as number | null, date: null as string | null }
@@ -685,97 +791,34 @@ export default function Investments() {
     const spyDaily = dailyReturnsMap.get('SPY') ?? []
     const spyToday = spyDaily.find(r => r.date === latestDate)?.return ?? null
     let totalValue = 0, weightedReturn = 0
-    for (const { ticker, value } of filteredPerfHoldings) {
+    for (const { ticker, value } of perfHoldings) {
       const dayReturn = (dailyReturnsMap.get(ticker.toUpperCase()) ?? []).find(r => r.date === latestDate)
       if (!dayReturn) continue
       weightedReturn += dayReturn.return * value
       totalValue += value
     }
     return { pct: totalValue > 0 ? weightedReturn / totalValue : null, spy: spyToday, date: latestDate }
-  }, [dailyReturnsMap, filteredPerfHoldings])
+  }, [dailyReturnsMap, perfHoldings])
 
   const historyStartMonth = useMemo(() => histStartMonthFor(historyRange, today), [historyRange]) // eslint-disable-line react-hooks/exhaustive-deps
-  const isDaily = historyRange === '1d' || historyRange === '1w' || historyRange === '1m'
+  const isDaily = historyRange === '1d' || historyRange === '1w' || historyRange === '1M'
 
-  const historyChartData = useMemo(() => {
-    type DataPoint = { date: string; portfolio: number; spy: number | null; portfolioValue: number; spyValue: number | null }
+  // For $ normalization: use the total value of selected accounts (not just investable tickers)
+  // so that accounts with non-Tiingo holdings (e.g. Fundrise) anchor at their true balance.
+  const filteredAccountsInvested = useMemo(() => {
+    if (selectedAccountIds === null) return invested
+    let total = 0
+    for (const a of includedAccounts) {
+      if (a.type !== 'investment' && a.type !== 'retirement') continue
+      if (!selectedAccountIds.has(a.id)) continue
+      for (const h of a.holdings ?? []) {
+        total += convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+      }
+    }
+    return total
+  }, [selectedAccountIds, includedAccounts, invested]) // eslint-disable-line react-hooks/exhaustive-deps
 
-    if (isDaily) {
-      // Daily mode: use dailyReturnsMap
-      const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : 33
-      const cutoff = new Date(today)
-      cutoff.setDate(cutoff.getDate() - cutoffDays)
-      const cutoffStr = cutoff.toISOString().slice(0, 10)
-      const spyDaily = dailyReturnsMap.get('SPY') ?? []
-      const dates = [...new Set(spyDaily.filter(r => r.date >= cutoffStr).map(r => r.date))].sort()
-      if (dates.length === 0 || filteredPerfHoldings.length === 0) return []
-      const byDate = new Map<string, Map<string, number>>()
-      for (const [ticker, returns] of dailyReturnsMap) {
-        const dd = new Map<string, number>()
-        for (const r of returns) dd.set(r.date, r.return)
-        byDate.set(ticker, dd)
-      }
-      let portfolioCum = 1, spyCum = 1
-      const raw: Array<DataPoint & { portfolioCum: number; spyCum: number }> = [
-        { date: cutoffStr, portfolio: 0, spy: 0, portfolioValue: 0, spyValue: 0, portfolioCum: 1, spyCum: 1 },
-      ]
-      for (const date of dates) {
-        let totalValue = 0, weightedReturn = 0
-        for (const { ticker, value, startMonth } of filteredPerfHoldings) {
-          // Respect acquired date — skip contribution before ticker was held
-          if (startMonth && date.slice(0, 7) < startMonth) continue
-          const r = byDate.get(ticker.toUpperCase())?.get(date)
-          if (r == null) continue
-          weightedReturn += r * value
-          totalValue += value
-        }
-        portfolioCum *= (1 + (totalValue > 0 ? weightedReturn / totalValue : 0))
-        const spyR = byDate.get('SPY')?.get(date)
-        if (spyR != null) spyCum *= (1 + spyR)
-        raw.push({ date, portfolio: parseFloat(((portfolioCum - 1) * 100).toFixed(2)), spy: parseFloat(((spyCum - 1) * 100).toFixed(2)), portfolioValue: 0, spyValue: 0, portfolioCum, spyCum })
-      }
-      const finalCum = raw[raw.length - 1]?.portfolioCum ?? 1
-      // $ mode: normalise to the filtered portfolio value, not total invested
-      const filteredInvested = filteredPerfHoldings.reduce((s, h) => s + h.value, 0)
-      const startVal = finalCum > 0 ? filteredInvested / finalCum : filteredInvested
-      return raw.map(p => ({ ...p, portfolioValue: Math.round(startVal * p.portfolioCum), spyValue: Math.round(startVal * p.spyCum) })) as DataPoint[]
-    }
-
-    // Monthly mode
-    const spyReturns = perfReturnsMap.get('SPY') ?? []
-    const months = spyReturns.map(r => r.month).filter(m => m > historyStartMonth && m <= currentMonth).sort()
-    if (months.length === 0 || filteredPerfHoldings.length === 0) return []
-    const byMonth = new Map<string, Map<string, number>>()
-    for (const [ticker, returns] of perfReturnsMap) {
-      const mm = new Map<string, number>()
-      for (const r of returns) mm.set(r.month, r.return)
-      byMonth.set(ticker, mm)
-    }
-    let portfolioCum = 1, spyCum = 1
-    const raw: Array<DataPoint & { portfolioCum: number; spyCum: number }> = [
-      { date: historyStartMonth, portfolio: 0, spy: 0, portfolioValue: 0, spyValue: 0, portfolioCum: 1, spyCum: 1 },
-    ]
-    for (const month of months) {
-      let totalValue = 0, weightedReturn = 0
-      for (const { ticker, value, startMonth } of filteredPerfHoldings) {
-        // Respect acquired date — skip contribution before ticker was held
-        if (startMonth && month < startMonth) continue
-        const r = byMonth.get(ticker.toUpperCase())?.get(month)
-        if (r == null) continue
-        weightedReturn += r * value
-        totalValue += value
-      }
-      portfolioCum *= (1 + (totalValue > 0 ? weightedReturn / totalValue : 0))
-      const spyR = byMonth.get('SPY')?.get(month)
-      if (spyR != null) spyCum *= (1 + spyR)
-      raw.push({ date: month, portfolio: parseFloat(((portfolioCum - 1) * 100).toFixed(2)), spy: spyReturns.length > 0 ? parseFloat(((spyCum - 1) * 100).toFixed(2)) : null, portfolioValue: 0, spyValue: 0, portfolioCum, spyCum })
-    }
-    const finalCum = raw[raw.length - 1]?.portfolioCum ?? 1
-    // $ mode: normalise to the filtered portfolio value, not total invested
-    const filteredInvested = filteredPerfHoldings.reduce((s, h) => s + h.value, 0)
-    const startVal = finalCum > 0 ? filteredInvested / finalCum : filteredInvested
-    return raw.map(p => ({ ...p, portfolioValue: Math.round(startVal * p.portfolioCum), spyValue: p.spy != null ? Math.round(startVal * p.spyCum) : null })) as DataPoint[]
-  }, [filteredPerfHoldings, perfReturnsMap, dailyReturnsMap, historyStartMonth, currentMonth, isDaily, invested]) // eslint-disable-line react-hooks/exhaustive-deps
+  // historyChartData is defined later (after portfolioAccounts) because it depends on selectedNavHistory
 
   const perfStartDate = `${today.getFullYear() - 5}-01-01`
   const perfTickersKey = useMemo(() => ['SPY', ...investableTickers].sort().join(','), [investableTickers])
@@ -784,11 +827,15 @@ export default function Investments() {
     if (!tiingoApiKey) return
     const tickers = ['SPY', ...investableTickers]
     let cancelled = false
+    setTiingoRateLimited(false)
     Promise.all(
       tickers.map(t =>
         fetchMonthlyAdjustedReturns(tiingoApiKey, t, perfStartDate, lmProxyUrl)
           .then(data => ({ ticker: t.toUpperCase(), data }))
-          .catch(() => ({ ticker: t.toUpperCase(), data: [] as MonthlyTickerReturn[] }))
+          .catch((err: unknown) => {
+            if (err instanceof TiingoRateLimitError) setTiingoRateLimited(true)
+            return { ticker: t.toUpperCase(), data: [] as MonthlyTickerReturn[] }
+          })
       )
     ).then(results => {
       if (cancelled) return
@@ -807,7 +854,10 @@ export default function Investments() {
       tickers.map(t =>
         fetchRecentDailyReturns(tiingoApiKey, t, 35, lmProxyUrl)
           .then(data => ({ ticker: t.toUpperCase(), data }))
-          .catch(() => ({ ticker: t.toUpperCase(), data: [] as DailyTickerReturn[] }))
+          .catch((err: unknown) => {
+            if (err instanceof TiingoRateLimitError) setTiingoRateLimited(true)
+            return { ticker: t.toUpperCase(), data: [] as DailyTickerReturn[] }
+          })
       )
     ).then(results => {
       if (cancelled) return
@@ -821,8 +871,8 @@ export default function Investments() {
   // ── Publish portfolio snapshot to store (for sidebar widget) ──
   // Use refs for frequently-changing values so the effect only fires when
   // dailyReturnsMap changes (after Tiingo fetch), not on every render.
-  const snapshotHoldingsRef = useRef(filteredPerfHoldings)
-  snapshotHoldingsRef.current = filteredPerfHoldings
+  const snapshotHoldingsRef = useRef(perfHoldings)
+  snapshotHoldingsRef.current = perfHoldings
   const snapshotInvestedRef = useRef(invested)
   snapshotInvestedRef.current = invested
   const snapshotTodayRef = useRef(todayData)
@@ -1112,13 +1162,13 @@ export default function Investments() {
               {lines >= 2 && (
                 <text x={x + width / 2} y={startY + lineH} textAnchor="middle" dominantBaseline="middle"
                   fill="white" fillOpacity={0.9} fontSize={10} fontWeight={500}>
-                  {formatCompact(nativeValue ?? size, nativeCurrency ?? profile.baseCurrency)}
+                  {formatCurrency(nativeValue ?? size, nativeCurrency ?? profile.baseCurrency)}
                 </text>
               )}
               {lines >= 3 && hasGain && shouldShowGain && (
                 <text x={x + width / 2} y={startY + 2 * lineH} textAnchor="middle" dominantBaseline="middle"
                   fill={positive ? '#86efac' : '#fca5a5'} fontSize={9}>
-                  {gain >= 0 ? '+' : ''}{formatCompact(nativeGains ?? gain, nativeCurrency ?? profile.baseCurrency)}{gainPctStr}
+                  {gain >= 0 ? '+' : '−'}{formatCurrency(Math.abs(nativeGains ?? gain), nativeCurrency ?? profile.baseCurrency)}{gainPctStr}
                 </text>
               )}
             </g>
@@ -1130,20 +1180,7 @@ export default function Investments() {
 
   // ── Account filter toggle ──
 
-  function toggleAccount(id: number) {
-    setSelectedAccountIds(prev => {
-      const allIds = portfolioAccounts.map(a => a.id)
-      const current = prev ?? new Set(allIds)
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      if (next.size === 0) return prev  // prevent deselecting all
-      if (next.size === allIds.length) return null  // all selected = null
-      return next
-    })
-  }
-
-  // ── Derived ──
+// ── Derived ──
 
   const portfolioAccounts = useMemo(() =>
     includedAccounts
@@ -1152,12 +1189,224 @@ export default function Investments() {
     [includedAccounts] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
+  // Merge daily NAV history from IBKR accounts, if all selected accounts have it
+  const selectedNavHistory = useMemo(() => {
+    const ids = selectedAccountIds !== null
+      ? [...selectedAccountIds]
+      : portfolioAccounts.map(a => a.id)
+    const relevant = portfolioAccounts.filter(a => ids.includes(a.id) && (a.navHistory?.length ?? 0) >= 2)
+    if (relevant.length !== ids.length) return null
+    const dateMap = new Map<string, number>()
+    for (const a of relevant) {
+      for (const { date, value } of a.navHistory!) {
+        dateMap.set(date, (dateMap.get(date) ?? 0) + value)
+      }
+    }
+    return [...dateMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, value]) => ({ date, value }))
+  }, [selectedAccountIds, portfolioAccounts]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const historyChartData = useMemo(() => {
+    type DataPoint = { date: string; portfolio: number; spy: number | null; portfolioValue: number; spyValue: number | null }
+
+    // ── Priority 1: actual IBKR NAV history ($ chart only — % from NAV includes deposits, distorting returns) ──
+    if (chartMode !== '%' && selectedNavHistory && selectedNavHistory.length >= 2) {
+      const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : historyRange === '1M' ? 33 : null
+      const fromDate = cutoffDays != null
+        ? (() => { const d = new Date(today); d.setDate(d.getDate() - cutoffDays); return d.toISOString().slice(0, 10) })()
+        : historyStartMonth
+      const sliced = selectedNavHistory.filter(p => p.date >= fromDate)
+      if (sliced.length >= 2) {
+        const baseline = sliced[0].value
+        const spyDailyMap = new Map((dailyReturnsMap.get('SPY') ?? []).map(r => [r.date, r.return]))
+        const spyMonthlyMap = new Map((perfReturnsMap.get('SPY') ?? []).map(r => [r.month, r.return]))
+        let spyCum = 1
+        return sliced.map((p, i) => {
+          if (i > 0) {
+            const spyR = isDaily ? spyDailyMap.get(p.date) : spyMonthlyMap.get(p.date)
+            if (spyR != null) spyCum *= (1 + spyR)
+          }
+          return {
+            date: p.date,
+            portfolio: parseFloat(((p.value / baseline - 1) * 100).toFixed(2)),
+            spy: parseFloat(((spyCum - 1) * 100).toFixed(2)),
+            portfolioValue: p.value,
+            spyValue: null,
+          } as DataPoint
+        })
+      }
+    }
+
+    // ── Priority 2: time-weighted equity + flat base for cash/T-Bills/non-Tiingo ──
+    if (isDaily) {
+      const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : 33
+      const cutoff = new Date(today)
+      cutoff.setDate(cutoff.getDate() - cutoffDays)
+      const cutoffStr = cutoff.toISOString().slice(0, 10)
+      const spyDaily = dailyReturnsMap.get('SPY') ?? []
+      const dates = [...new Set(spyDaily.filter(r => r.date >= cutoffStr).map(r => r.date))].sort()
+      if (dates.length === 0) return []
+      const byDate = new Map<string, Map<string, number>>()
+      for (const [ticker, returns] of dailyReturnsMap) {
+        const dd = new Map<string, number>()
+        for (const r of returns) dd.set(r.date, r.return)
+        byDate.set(ticker, dd)
+      }
+      const trackedEquityValue = filteredPerfHoldings
+        .filter(h => byDate.has(h.ticker.toUpperCase()))
+        .reduce((s, h) => s + h.value, 0)
+      const flatBase = filteredAccountsInvested - trackedEquityValue
+      let portfolioCum = 1, spyCum = 1
+      const raw: Array<DataPoint & { portfolioCum: number; spyCum: number }> = [
+        { date: cutoffStr, portfolio: 0, spy: 0, portfolioValue: 0, spyValue: 0, portfolioCum: 1, spyCum: 1 },
+      ]
+      for (const date of dates) {
+        let totalValue = 0, weightedReturn = 0
+        for (const { ticker, value, startMonth } of filteredPerfHoldings) {
+          if (startMonth && date.slice(0, 7) < startMonth) continue
+          const r = byDate.get(ticker.toUpperCase())?.get(date)
+          if (r == null) continue
+          weightedReturn += r * value
+          totalValue += value
+        }
+        portfolioCum *= (1 + (totalValue > 0 ? weightedReturn / totalValue : 0))
+        const spyR = byDate.get('SPY')?.get(date)
+        if (spyR != null) spyCum *= (1 + spyR)
+        raw.push({ date, portfolio: parseFloat(((portfolioCum - 1) * 100).toFixed(2)), spy: parseFloat(((spyCum - 1) * 100).toFixed(2)), portfolioValue: 0, spyValue: 0, portfolioCum, spyCum })
+      }
+      const finalCum = raw[raw.length - 1]?.portfolioCum ?? 1
+      const equityStartVal = finalCum > 0 && trackedEquityValue > 0 ? trackedEquityValue / finalCum : 0
+      return raw.map(p => ({ ...p, portfolioValue: Math.round(flatBase + equityStartVal * p.portfolioCum), spyValue: null })) as DataPoint[]
+    }
+
+    // Monthly mode
+    const spyReturns = perfReturnsMap.get('SPY') ?? []
+    const months = spyReturns.map(r => r.month).filter(m => m > historyStartMonth && m <= currentMonth).sort()
+    if (months.length === 0) return []
+    const byMonth = new Map<string, Map<string, number>>()
+    for (const [ticker, returns] of perfReturnsMap) {
+      const mm = new Map<string, number>()
+      for (const r of returns) mm.set(r.month, r.return)
+      byMonth.set(ticker, mm)
+    }
+    const trackedEquityValue = filteredPerfHoldings
+      .filter(h => byMonth.has(h.ticker.toUpperCase()))
+      .reduce((s, h) => s + h.value, 0)
+    const flatBase = filteredAccountsInvested - trackedEquityValue
+    let portfolioCum = 1, spyCum = 1
+    const raw: Array<DataPoint & { portfolioCum: number; spyCum: number }> = [
+      { date: historyStartMonth, portfolio: 0, spy: 0, portfolioValue: 0, spyValue: 0, portfolioCum: 1, spyCum: 1 },
+    ]
+    for (const month of months) {
+      let totalValue = 0, weightedReturn = 0
+      for (const { ticker, value, startMonth } of filteredPerfHoldings) {
+        if (startMonth && month < startMonth) continue
+        const r = byMonth.get(ticker.toUpperCase())?.get(month)
+        if (r == null) continue
+        weightedReturn += r * value
+        totalValue += value
+      }
+      portfolioCum *= (1 + (totalValue > 0 ? weightedReturn / totalValue : 0))
+      const spyR = byMonth.get('SPY')?.get(month)
+      if (spyR != null) spyCum *= (1 + spyR)
+      raw.push({ date: month, portfolio: parseFloat(((portfolioCum - 1) * 100).toFixed(2)), spy: spyReturns.length > 0 ? parseFloat(((spyCum - 1) * 100).toFixed(2)) : null, portfolioValue: 0, spyValue: 0, portfolioCum, spyCum })
+    }
+    const finalCum = raw[raw.length - 1]?.portfolioCum ?? 1
+    const equityStartVal = finalCum > 0 && trackedEquityValue > 0 ? trackedEquityValue / finalCum : 0
+    return raw.map(p => ({ ...p, portfolioValue: Math.round(flatBase + equityStartVal * p.portfolioCum), spyValue: null })) as DataPoint[]
+  }, [selectedNavHistory, filteredPerfHoldings, filteredAccountsInvested, perfReturnsMap, dailyReturnsMap, historyStartMonth, currentMonth, isDaily, historyRange, chartMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Whether any selected account has real NAV history (determines $ chart mode)
+  const hasStackedNavHistory = useMemo(() =>
+    portfolioAccounts
+      .filter(a => selectedAccountIds === null || selectedAccountIds.has(a.id))
+      .some(a => (a.navHistory?.length ?? 0) >= 2),
+    [selectedAccountIds, portfolioAccounts]
+  )
+
+  // ── Per-account stacked data for $ chart mode ──
+  const stackedChartData = useMemo(() => {
+    const selectedIds = selectedAccountIds !== null
+      ? [...selectedAccountIds]
+      : portfolioAccounts.map(a => a.id)
+    const selected = portfolioAccounts.filter(a => selectedIds.includes(a.id))
+
+    const ibkrAccs = selected.filter(a => a.navHistory && a.navHistory.length >= 2)
+    const flatAccs = selected.filter(a => !a.navHistory || a.navHistory.length < 2)
+
+    const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : historyRange === '1M' ? 33 : null
+    const fromDate = cutoffDays != null
+      ? (() => { const d = new Date(today); d.setDate(d.getDate() - cutoffDays); return d.toISOString().slice(0, 10) })()
+      : historyStartMonth
+
+    // Build sorted nav series per IBKR account (converted to base currency)
+    const ibkrNavSeries = new Map<number, Array<{ date: string; value: number }>>()
+    for (const a of ibkrAccs) {
+      const series = a.navHistory!
+        .map(p => ({
+          date: p.date,
+          value: convertToBase(p.value, a.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE),
+        }))
+        .sort((x, y) => x.date.localeCompare(y.date))
+      ibkrNavSeries.set(a.id, series)
+    }
+
+    // Carry-forward: find the last known NAV value at or before `lookupDate`.
+    // Handles both YYYY-MM-DD (daily) and YYYY-MM (monthly) lookup keys by
+    // comparing only the relevant prefix of the navHistory date.
+    function navAtOrBefore(series: Array<{ date: string; value: number }>, lookupDate: string): number {
+      const isMonthKey = lookupDate.length === 7
+      let last = 0
+      for (const p of series) {
+        const cmp = isMonthKey ? p.date.slice(0, 7) : p.date
+        if (cmp > lookupDate) break
+        last = p.value
+      }
+      return last
+    }
+
+    // Use the SPY date backbone so the x-axis spans the full selected range,
+    // same as historyChartData. Fall back to navHistory dates if SPY not loaded.
+    let dates: string[]
+    if (isDaily) {
+      const spyDates = [...new Set(
+        (dailyReturnsMap.get('SPY') ?? []).filter(r => r.date >= fromDate).map(r => r.date)
+      )].sort()
+      dates = spyDates.length > 0
+        ? spyDates
+        : [...new Set(ibkrAccs.flatMap(a => a.navHistory!.map(p => p.date).filter(d => d >= fromDate)))].sort()
+    } else {
+      const spyMonths = (perfReturnsMap.get('SPY') ?? []).map(r => r.month).filter(m => m >= fromDate).sort()
+      dates = spyMonths.length > 0
+        ? spyMonths
+        : [...new Set(ibkrAccs.flatMap(a => a.navHistory!.map(p => p.date.slice(0, 7)).filter(m => m >= fromDate)))].sort()
+    }
+
+    if (dates.length === 0) return [{ date: fromDate, total: 0 }]
+
+    return dates.map(date => {
+      const row: Record<string, number> = { total: 0 }
+      let total = 0
+      for (const a of ibkrAccs) {
+        const val = navAtOrBefore(ibkrNavSeries.get(a.id)!, date)
+        row[`acc_${a.id}`] = val
+        total += val
+      }
+      for (const a of flatAccs) {
+        row[`acc_${a.id}`] = 0
+      }
+      row.total = total
+      return { date, ...row }
+    })
+  }, [selectedAccountIds, portfolioAccounts, historyRange, historyStartMonth, isDaily, dailyReturnsMap, perfReturnsMap, profile.baseCurrency]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const mostRecentSyncedAt = useMemo(() => {
     const dates = portfolioAccounts.map(a => a.syncedAt).filter(Boolean).sort()
     return dates.length ? dates[dates.length - 1] : null
   }, [portfolioAccounts])
 
-  // ── Portfolio events from broker data (dividends from Plaid accounts) ──
+  // ── Portfolio events from broker data ──
   const portfolioEventsByDate = useMemo(() => {
     type PEvent = { emoji: string; color: string; label: string }
     const map = new Map<string, PEvent[]>()
@@ -1165,13 +1414,33 @@ export default function Investments() {
       if (!map.has(dateKey)) map.set(dateKey, [])
       map.get(dateKey)!.push(ev)
     }
+
+    const EVENT_META: Record<string, { emoji: string; color: string }> = {
+      buy:          { emoji: '↑', color: '#3b82f6' },
+      sell:         { emoji: '↓', color: '#f97316' },
+      transfer_in:  { emoji: '+', color: '#22c55e' },
+      transfer_out: { emoji: '−', color: '#9ca3af' },
+    }
+
+    const MIN_AMOUNT_BASE = 500
+
     for (const a of portfolioAccounts) {
       for (const d of a.dividends ?? []) {
         if (!d.date) continue
         const dateKey = isDaily ? d.date : d.date.slice(0, 7)
         const amtBase = convertToBase(d.amount, d.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-        if (amtBase < 5) continue  // skip tiny amounts
+        if (amtBase < 5) continue
         add(dateKey, { emoji: '$', color: '#22c55e', label: `${d.securityName || d.ticker || 'Div'}: +${formatCompact(amtBase, profile.baseCurrency)}` })
+      }
+      for (const ev of a.investmentEvents ?? []) {
+        const amtBase = convertToBase(ev.amount, ev.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        if (amtBase < MIN_AMOUNT_BASE) continue
+        const dateKey = isDaily ? ev.date : ev.date.slice(0, 7)
+        const meta = EVENT_META[ev.type]
+        const security = (ev.ticker ?? ev.name.slice(0, 20)) || ''
+        const qtyStr = ev.quantity != null ? ` ${ev.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}sh` : ''
+        const label = `${a.name}: ${ev.type === 'buy' ? 'Buy' : ev.type === 'sell' ? 'Sell' : ev.type === 'transfer_in' ? 'Transfer in' : 'Transfer out'}${security ? ` ${security}` : ''}${qtyStr} · ${formatCompact(amtBase, profile.baseCurrency)}`
+        add(dateKey, { emoji: meta.emoji, color: meta.color, label })
       }
     }
     return map
@@ -1346,44 +1615,65 @@ export default function Investments() {
 
       <div className="p-4 space-y-4">
 
+        {tiingoRateLimited && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-[12px]">
+            <span>⚠</span>
+            <span>Tiingo rate limit reached — performance data may be incomplete. Wait a few minutes and refresh.</span>
+            <button onClick={() => setTiingoRateLimited(false)} className="ml-auto text-amber-500 hover:text-amber-700 dark:hover:text-amber-200 leading-none">✕</button>
+          </div>
+        )}
+
         {/* ── Metric cards ── */}
-        <div className="grid grid-cols-5 gap-[9px]">
+        <div className="grid grid-cols-6 gap-[9px]">
           <MetricCard
             label="Total invested"
-            value={formatCompact(invested, profile.baseCurrency)}
+            value={formatCurrency(invested, profile.baseCurrency)}
             tooltip="Total value of investment and retirement accounts."
             sub="excl. cash & real estate"
           />
 
-          {/* Returns card: vertical label / value pairs */}
-          <div className="col-span-2 bg-gray-50 dark:bg-gray-800 rounded-lg px-[13px] py-[11px]">
-            <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-[7px] flex items-center gap-0.5">
+          {/* Returns card: 4 columns with vertical labels */}
+          <div className="col-span-3 bg-gray-50 dark:bg-gray-800 rounded-lg px-[13px] py-[11px]">
+            <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-[6px] flex items-center gap-0.5">
               Returns
               <InfoTooltip text="Today: most recent trading day. YTD/12m: time-weighted using current holdings. All: unrealized gain vs cost basis. Excludes cash and T-bills." />
             </div>
-            <div className="space-y-[3px]">
+            <div className="flex">
               {([
                 { label: 'Today', pct: todayData.pct, spy: todayData.spy, amt: todayData.pct != null ? todayData.pct * invested : null, noData: !tiingoApiKey },
                 { label: 'YTD',   pct: portfolioYtd,  spy: spyYtd,       amt: portfolioYtd != null ? portfolioYtd * invested : null,  noData: !tiingoApiKey },
-                { label: '12m',   pct: portfolio12m,  spy: spy12m,        amt: portfolio12m != null ? portfolio12m * invested : null,  noData: !tiingoApiKey },
-                { label: 'All',   pct: totalReturnPct, spy: null,          amt: totalNetGains !== 0 ? totalNetGains : null,            noData: false },
+                { label: '12m',   pct: portfolio12m,  spy: spy12m,       amt: portfolio12m != null ? portfolio12m * invested : null,  noData: !tiingoApiKey },
+                { label: 'All',   pct: totalReturnPct, spy: spyAll,       amt: totalNetGains !== 0 ? totalNetGains : null,            noData: false },
               ] as Array<{ label: string; pct: number | null; spy: number | null; amt: number | null; noData: boolean }>).map((item, i) => (
-                <div key={item.label} className="flex items-baseline justify-between gap-2">
-                  <span className="text-[11px] text-gray-400 shrink-0 w-[28px]">{item.label}</span>
-                  <div className="flex items-baseline gap-1 min-w-0">
-                    <span className={`tabular-nums font-semibold ${i === 0 ? 'text-[20px]' : 'text-[12px]'} ${item.pct != null ? returnClass(item.pct) : 'text-gray-300 dark:text-gray-600'}`}>
-                      {item.pct != null ? fmtReturn(item.pct) : item.noData ? '–' : '—'}
+                <div key={item.label} className="flex-1 flex items-stretch min-w-0">
+                  {i > 0 && <div className="w-px self-stretch bg-gray-200 dark:bg-gray-700 mx-3 shrink-0" />}
+                  <div className="flex items-center pr-[5px] shrink-0">
+                    <span
+                      className="text-[8.5px] font-medium text-gray-400 uppercase tracking-wider select-none"
+                      style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                    >
+                      {item.label}
                     </span>
-                    {item.amt != null && i > 0 && (
-                      <span className="text-[9.5px] text-gray-400 font-normal whitespace-nowrap">
-                        ({item.amt >= 0 ? '+' : ''}{formatCompact(item.amt, profile.baseCurrency)})
-                      </span>
-                    )}
-                    {item.spy != null && (
-                      <span className={`text-[9.5px] font-normal whitespace-nowrap ${returnClass(item.spy)}`}>
-                        SPY {fmtReturn(item.spy)}
-                      </span>
-                    )}
+                  </div>
+                  <div className="flex flex-col justify-center min-w-0">
+                    <div className="flex items-start justify-between gap-1 leading-none">
+                      <div className="flex flex-col">
+                        <span className={`text-[20px] font-medium tabular-nums leading-none ${item.pct != null ? returnClass(item.pct) : 'text-gray-300 dark:text-gray-600'}`}>
+                          {item.pct != null ? fmtReturn(item.pct) : item.noData ? '–' : '—'}
+                        </span>
+                        {item.amt != null && (
+                          <span className={`text-[11px] mt-[1px] whitespace-nowrap tabular-nums ${item.amt >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {item.amt >= 0 ? '+' : '−'}{formatCurrency(Math.abs(item.amt), profile.baseCurrency)}
+                          </span>
+                        )}
+                      </div>
+                      {item.spy != null && (
+                        <div className="flex flex-col items-end text-[9px] text-gray-400 dark:text-gray-500 leading-[1.3] shrink-0 pt-[2px]">
+                          <span>SPY</span>
+                          <span>{fmtReturn(item.spy)}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -1393,14 +1683,14 @@ export default function Investments() {
           <MetricCard
             label="Annual dividends"
             tooltip="Projected dividends for the next 12 months, based on historical payment patterns."
-            value={formatCompact(annualDivBase, profile.baseCurrency)}
+            value={formatCurrency(annualDivBase, profile.baseCurrency)}
             valueClass="text-green-600"
             sub={divSub}
           />
           <MetricCard
             label="Annual interests"
             tooltip="Estimated annual interest from fixed-income positions, T-bills, and cash."
-            value={formatCompact(annualInterestBase, profile.baseCurrency)}
+            value={formatCurrency(annualInterestBase, profile.baseCurrency)}
             valueClass="text-green-600"
             sub={interestSub}
           />
@@ -1422,25 +1712,11 @@ export default function Investments() {
                 ))}
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] text-gray-400">Accounts:</span>
-              {[...portfolioAccounts].sort((a, b) => a.name.localeCompare(b.name)).map(a => {
-                const isSelected = selectedAccountIds === null || selectedAccountIds.has(a.id)
-                return (
-                  <button
-                    key={a.id}
-                    onClick={() => toggleAccount(a.id)}
-                    className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                      isSelected
-                        ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-300 dark:border-blue-600 text-blue-700 dark:text-blue-400'
-                        : 'border-gray-200 dark:border-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-                    }`}
-                  >
-                    {a.name}
-                  </button>
-                )
-              })}
-            </div>
+            <AccountFilter
+              accounts={[...portfolioAccounts].sort((a, b) => a.name.localeCompare(b.name))}
+              selectedIds={selectedAccountIds}
+              onChange={setSelectedAccountIds}
+            />
             <div className="flex items-center gap-1">
               {HIST_RANGES.map(r => (
                 <button key={r} onClick={() => setHistoryRange(r)}
@@ -1452,18 +1728,135 @@ export default function Investments() {
               ))}
             </div>
           </div>
-          {historyChartData.length === 0 ? (
+          {chartMode === '$' && hasStackedNavHistory ? (() => {
+            const stackedAccounts = portfolioAccounts.filter(a =>
+              selectedAccountIds === null || selectedAccountIds.has(a.id)
+            )
+            const hasFlat = stackedAccounts.some(a => !a.navHistory || a.navHistory.length < 2)
+            return (
+              <>
+                <div className="h-[210px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart
+                      key={`$-${selectedAccountIds ? [...selectedAccountIds].sort().join(',') : 'all'}`}
+                      data={stackedChartData}
+                      margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.4} />
+                      <XAxis dataKey="date" tickFormatter={fmtChartDate} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={40} />
+                      <YAxis
+                        domain={[0, 'auto']}
+                        tick={{ fontSize: 10 }}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v: number) => formatCompact(v, profile.baseCurrency)}
+                        width={52}
+                      />
+                      <RCTooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null
+                          const total = (payload as any[]).reduce((s, p) => s + (p.value ?? 0), 0)
+                          const evts = portfolioEventsByDate.get(label as string) ?? []
+                          return (
+                            <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl min-w-[160px]">
+                              <div className="text-gray-400 mb-1">{fmtChartDate(label as string)}</div>
+                              <div className="flex justify-between gap-3 font-medium mb-1">
+                                <span>Total</span>
+                                <span>{formatCurrency(total, profile.baseCurrency)}</span>
+                              </div>
+                              {[...(payload as any[])].reverse().map((p, i) => {
+                                const acctId = Number(String(p.dataKey).replace('acc_', ''))
+                                const acct = portfolioAccounts.find(a => a.id === acctId)
+                                return (
+                                  <div key={i} className="flex justify-between gap-3 text-[10px]">
+                                    <span style={{ color: p.fill }}>{acct?.name ?? p.dataKey}</span>
+                                    <span>{formatCurrency(p.value as number, profile.baseCurrency)}</span>
+                                  </div>
+                                )
+                              })}
+                              {evts.length > 0 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-gray-700 space-y-[3px]">
+                                  {evts.map((ev, i) => (
+                                    <div key={i} className="flex items-center gap-1.5 text-[10px]">
+                                      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px]" style={{ background: ev.color }}>{ev.emoji}</span>
+                                      <span className="text-gray-300 truncate">{ev.label}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }}
+                      />
+                      {[...portfolioEventsByDate.entries()]
+                        .filter(([dateKey]) => stackedChartData.some(d => d.date === dateKey))
+                        .map(([dateKey, evts]) => (
+                          <ReferenceLine key={dateKey} x={dateKey} stroke={evts[0]?.color ?? '#64748b'} strokeDasharray="4 2" strokeWidth={1.5}
+                            label={({ viewBox }: any) => {
+                              if (!viewBox || viewBox.x == null) return <g />
+                              return (
+                                <g transform={`translate(${Math.max(8, viewBox.x) + 4}, 6)`}>
+                                  {evts.slice(0, 3).map((ev, i) => (
+                                    <g key={i} transform={`translate(0, ${i * 16})`}>
+                                      <circle r="6" fill={ev.color} fillOpacity={0.9} />
+                                      <text y="3.5" textAnchor="middle" fontSize="9" fill="#fff">{ev.emoji}</text>
+                                    </g>
+                                  ))}
+                                </g>
+                              )
+                            }}
+                          />
+                        ))
+                      }
+                      {stackedAccounts.map((a, i) => {
+                        const color = STACK_COLORS[i % STACK_COLORS.length]
+                        return (
+                          <Area key={a.id} type="monotone" dataKey={`acc_${a.id}`} stackId="1"
+                            stroke={color} fill={color} fillOpacity={0.55} strokeWidth={1}
+                            dot={false} connectNulls name={a.name} />
+                        )
+                      })}
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex items-center gap-3 mt-1 pb-1 text-[10px] text-gray-400 flex-wrap">
+                  {stackedAccounts.map((a, i) => {
+                    const color = STACK_COLORS[i % STACK_COLORS.length]
+                    const isFlat = !a.navHistory || a.navHistory.length < 2
+                    return (
+                      <span key={a.id} className="flex items-center gap-1">
+                        <span className="w-3 h-[2px] inline-block rounded" style={{ background: color }} />
+                        {a.name}{isFlat ? ' ~' : ''}
+                      </span>
+                    )
+                  })}
+                  {hasFlat && (
+                    <span className="text-[9px] text-gray-300 ml-auto">~ current balance (no history)</span>
+                  )}
+                </div>
+              </>
+            )
+          })() : historyChartData.length === 0 ? (
             <div className="h-[220px] flex items-center justify-center text-[11.5px] text-gray-400">
-              {tiingoApiKey ? 'Loading performance data…' : 'Set a Tiingo API key in Settings to see history.'}
+              {!tiingoApiKey
+                ? 'Set a Tiingo API key in Settings to see history.'
+                : chartMode === '$'
+                  ? 'Sync IBKR accounts to see $ history. IBKR Flex query must include EquitySummaryByReportDateInBase.'
+                  : 'Loading performance data…'}
             </div>
           ) : (
             <>
               <div className="h-[210px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={historyChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <LineChart
+                    key={selectedAccountIds ? [...selectedAccountIds].sort().join(',') : 'all'}
+                    data={historyChartData}
+                    margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.4} />
                     <XAxis dataKey="date" tickFormatter={fmtChartDate} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={40} />
                     <YAxis
+                      domain={chartMode === '$' ? [0, 'auto'] : ['auto', 'auto']}
                       tick={{ fontSize: 10 }}
                       tickLine={false}
                       axisLine={false}
@@ -1472,12 +1865,12 @@ export default function Investments() {
                         : (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
                       width={52}
                     />
-                    <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />
+                    {chartMode === '%' && <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />}
                     <RCTooltip
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null
-                        const port = payload.find((p: any) => p.dataKey === (chartMode === '$' ? 'portfolioValue' : 'portfolio'))
-                        const spy = payload.find((p: any) => p.dataKey === (chartMode === '$' ? 'spyValue' : 'spy'))
+                        const port = (payload as any[]).find((p) => p.dataKey === (chartMode === '$' ? 'portfolioValue' : 'portfolio'))
+                        const spy = chartMode === '%' ? (payload as any[]).find((p) => p.dataKey === 'spy') : null
                         const evts = portfolioEventsByDate.get(label as string) ?? []
                         return (
                           <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl min-w-[160px]">
@@ -1486,15 +1879,17 @@ export default function Investments() {
                               <div className="flex justify-between gap-3">
                                 <span className="text-blue-400">Portfolio</span>
                                 <span className={chartMode === '$' ? '' : returnClass(port.value as number)}>
-                                  {chartMode === '$' ? formatCompact(port.value as number, profile.baseCurrency) : fmtReturn((port.value as number) / 100)}
+                                  {chartMode === '$'
+                                    ? formatCurrency(port.value as number, profile.baseCurrency)
+                                    : fmtReturn((port.value as number) / 100)}
                                 </span>
                               </div>
                             )}
                             {spy && spy.value != null && (
                               <div className="flex justify-between gap-3">
-                                <span className="text-orange-400">SPY (norm.)</span>
-                                <span className={chartMode === '$' ? '' : returnClass(spy.value as number)}>
-                                  {chartMode === '$' ? formatCompact(spy.value as number, profile.baseCurrency) : fmtReturn((spy.value as number) / 100)}
+                                <span className="text-orange-400">SPY</span>
+                                <span className={returnClass(spy.value as number)}>
+                                  {fmtReturn((spy.value as number) / 100)}
                                 </span>
                               </div>
                             )}
@@ -1533,13 +1928,14 @@ export default function Investments() {
                       ))
                     }
                     <Line type="monotone" dataKey={chartMode === '$' ? 'portfolioValue' : 'portfolio'} stroke="#3b82f6" strokeWidth={1.5} dot={false} name="Portfolio" connectNulls />
-                    <Line type="monotone" dataKey={chartMode === '$' ? 'spyValue' : 'spy'} stroke="#f97316" strokeWidth={1.5} dot={false} name="SPY" connectNulls />
+                    {chartMode === '%' && <Line type="monotone" dataKey="spy" stroke="#f97316" strokeWidth={1.5} dot={false} name="SPY" connectNulls />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
               <div className="flex items-center gap-3 mt-1 pb-1 text-[10px] text-gray-400 justify-end">
                 <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-blue-500 inline-block rounded" /> Portfolio</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-orange-400 inline-block rounded" /> SPY {chartMode === '$' ? '(normalized)' : ''}</span>
+                {chartMode === '%' && <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-orange-400 inline-block rounded" /> SPY</span>}
+                {chartMode === '$' && <span className="text-[9px] text-gray-300">Sync IBKR to enable per-account stacking</span>}
               </div>
             </>
           )}
@@ -1651,7 +2047,7 @@ export default function Investments() {
           <Card className="self-start">
             <div className="flex items-center justify-between mb-1">
               <div className="text-[11.5px] font-medium text-gray-500 dark:text-gray-400">
-                Accounts ({portfolioAccounts.length})
+                Accounts
               </div>
               <div className="flex items-center gap-2">
                 {portfolioSyncMsg && (
@@ -1667,11 +2063,6 @@ export default function Investments() {
                 </button>
               </div>
             </div>
-            {mostRecentSyncedAt && (
-              <div className="text-[9.5px] text-gray-400 mb-2">
-                {syncLabel}
-              </div>
-            )}
             {portfolioAccounts.length === 0 ? (
               <div className="text-[11px] text-gray-400">No investment or retirement accounts.</div>
             ) : (

@@ -1,4 +1,4 @@
-import type { PlaidHolding, PlaidDividend, AssetAllocation, TaxLot } from '../types'
+import type { PlaidHolding, PlaidDividend, AssetAllocation, TaxLot, InvestmentEvent } from '../types'
 
 async function plaidPost(proxyUrl: string, path: string, body: object): Promise<any> {
   const res = await fetch(`${proxyUrl.replace(/\/$/, '')}/plaid${path}`, {
@@ -19,7 +19,7 @@ export async function fetchPlaidHoldings(proxyUrl: string, accessToken: string):
   return data.holdings.map((h: any) => {
     const sec = data.securities.find((s: any) => s.security_id === h.security_id)
     return {
-      ticker: sec?.ticker_symbol ?? null,
+      ticker: plaidTicker(sec),
       name: sec?.name ?? 'Unknown',
       quantity: parseFloat(h.quantity) || 0,
       institutionPrice: parseFloat(h.institution_price) || 0,
@@ -31,9 +31,30 @@ export async function fetchPlaidHoldings(proxyUrl: string, accessToken: string):
   })
 }
 
+function plaidTicker(sec: any): string | null {
+  const explicit = sec?.ticker_symbol ?? sec?.tickerSymbol ?? sec?.symbol
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim().toUpperCase()
+  const name = typeof sec?.name === 'string' ? sec.name.trim() : ''
+  const match = name.match(/\b[A-Z]{1,5}(?:\.[A-Z])?\b$/)
+  return match ? match[0] : null
+}
+
 export interface PlaidInvestmentData {
   dividends: PlaidDividend[]
   buyDates: Record<string, string>  // ticker → most recent buy transaction date (YYYY-MM-DD)
+  investmentEvents: InvestmentEvent[]
+}
+
+function plaidEventType(t: { type: string; subtype?: string | null; amount?: number }): InvestmentEvent['type'] | null {
+  if (t.type === 'buy') return 'buy'
+  if (t.type === 'sell') return 'sell'
+  if (t.type === 'transfer') return (t.amount ?? 0) < 0 ? 'transfer_in' : 'transfer_out'
+  if (t.type === 'cash') {
+    const sub = (t.subtype ?? '').toLowerCase()
+    if (['contribution', 'deposit', 'rollover'].includes(sub)) return 'transfer_in'
+    if (['withdrawal', 'distribution', 'disbursement'].includes(sub)) return 'transfer_out'
+  }
+  return null
 }
 
 export function deriveTaxLots(holdings: PlaidHolding[], source: TaxLot['source']): TaxLot[] {
@@ -83,20 +104,33 @@ export async function fetchPlaidInvestmentData(proxyUrl: string, accessToken: st
     })
 
   const buyDates: Record<string, string> = {}
+  const investmentEvents: InvestmentEvent[] = []
   for (const t of (data.investment_transactions ?? [])) {
-    if (t.type !== 'buy') continue
     const sec = (data.securities ?? []).find((s: any) => s.security_id === t.security_id)
-    const ticker = sec?.ticker_symbol
-    if (!ticker) continue
-    if (!buyDates[ticker] || t.date > buyDates[ticker]) buyDates[ticker] = t.date
+    const ticker: string | null = sec?.ticker_symbol ?? null
+    if (t.type === 'buy' && ticker) {
+      if (!buyDates[ticker] || t.date > buyDates[ticker]) buyDates[ticker] = t.date
+    }
+    const evType = plaidEventType(t)
+    if (evType) {
+      investmentEvents.push({
+        date: t.date,
+        type: evType,
+        ticker,
+        name: sec?.name ?? t.name ?? '',
+        amount: Math.abs(t.amount ?? 0),
+        currency: (t.iso_currency_code ?? 'USD').toUpperCase(),
+        quantity: t.quantity != null ? Math.abs(t.quantity) : undefined,
+      })
+    }
   }
 
-  return { dividends, buyDates }
+  return { dividends, buyDates, investmentEvents }
 }
 
 // Derive equity/bonds/cash split from holdings security types.
-// Uses flexible substring matching to handle both Plaid ('fixed income', 'cash')
-// and SnapTrade type strings ('fixed_income', 'bond', 'money market', etc.).
+// Uses flexible substring matching to handle provider variations like
+// 'fixed_income', 'bond', 'money market', etc.
 export function computeAllocationFromHoldings(holdings: PlaidHolding[]): AssetAllocation {
   const total = holdings.reduce((s, h) => s + Math.max(0, h.institutionValue), 0)
   if (total <= 0) return { equity: 0, bonds: 0, cash: 100 }

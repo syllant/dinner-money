@@ -3,12 +3,13 @@ import { useAppStore } from '../../store/useAppStore'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { Button } from '../../components/ui/Button'
 import { Banner } from '../../components/ui/Banner'
+import { DriveSync } from '../../components/ui/DriveSync'
 import { fetchCurrentUser, LunchMoneyError } from '../../lib/lunchmoney'
 import { fetchFredMonthlySeries } from '../../lib/fred'
 import { fetchMonthlyAdjustedReturns } from '../../lib/tiingo'
-import { fetchSnapTradeStatus } from '../../lib/snaptrade'
+import { fetchIbkrFlexXml } from '../../lib/ibkrFlex'
 
-type ApiService = 'lunchmoney' | 'tiingo' | 'fred' | 'snaptrade'
+type ApiService = 'lunchmoney' | 'tiingo' | 'fred' | 'ibkr-flex'
 
 export default function Settings() {
   const {
@@ -16,16 +17,15 @@ export default function Settings() {
     minTransactionEUR, setMinTransactionEUR,
     tiingoApiKey, setTiingoApiKey,
     fredApiKey, setFredApiKey,
-    snapTradeClientId, setSnapTradeClientId,
-    snapTradeConsumerKey, setSnapTradeConsumerKey,
-    snapTradeUserId, snapTradeUserSecret,
+    ibkrFlexToken, setIbkrFlexToken,
+    ibkrFlexQueryId, setIbkrFlexQueryId,
   } = useAppStore()
   const [keyInput, setKeyInput] = useState(lmApiKey ?? '')
   const [proxyInput, setProxyInput] = useState(lmProxyUrl ?? '')
   const [tiingoKeyInput, setTiingoKeyInput] = useState(tiingoApiKey ?? '')
   const [fredKeyInput, setFredKeyInput] = useState(fredApiKey ?? '')
-  const [snapTradeClientIdInput, setSnapTradeClientIdInput] = useState(snapTradeClientId ?? '')
-  const [snapTradeConsumerKeyInput, setSnapTradeConsumerKeyInput] = useState(snapTradeConsumerKey ?? '')
+  const [ibkrFlexTokenInput, setIbkrFlexTokenInput] = useState(ibkrFlexToken ?? '')
+  const [ibkrFlexQueryIdInput, setIbkrFlexQueryIdInput] = useState(ibkrFlexQueryId ?? '')
   const [testingService, setTestingService] = useState<ApiService | null>(null)
   const [testResults, setTestResults] = useState<Partial<Record<ApiService, { ok: boolean; message: string }>>>({})
   const [savedService, setSavedService] = useState<ApiService | null>(null)
@@ -38,9 +38,9 @@ export default function Settings() {
     if (service === 'lunchmoney') setLmApiKey(keyInput.trim() || null)
     if (service === 'tiingo') setTiingoApiKey(tiingoKeyInput.trim() || null)
     if (service === 'fred') setFredApiKey(fredKeyInput.trim() || null)
-    if (service === 'snaptrade') {
-      setSnapTradeClientId(snapTradeClientIdInput.trim() || null)
-      setSnapTradeConsumerKey(snapTradeConsumerKeyInput.trim() || null)
+    if (service === 'ibkr-flex') {
+      setIbkrFlexToken(ibkrFlexTokenInput.trim() || null)
+      setIbkrFlexQueryId(ibkrFlexQueryIdInput.trim() || null)
     }
     setSavedService(service)
     setApiResult(service, { ok: true, message: 'Key saved locally' })
@@ -53,7 +53,7 @@ export default function Settings() {
         ? tiingoKeyInput.trim()
         : service === 'fred'
           ? fredKeyInput.trim()
-          : snapTradeClientIdInput.trim()
+          : ibkrFlexTokenInput.trim()
     if (!key) return
     setTestingService(service)
     setSavedService(null)
@@ -73,13 +73,13 @@ export default function Settings() {
         setFredApiKey(key)
         setApiResult(service, { ok: true, message: `DGS10 reachable (${rows.length} monthly rows)` })
       } else {
-        if (!proxy) throw new Error('SnapTrade requires the Cloudflare Worker proxy so requests can be signed server-side.')
-        const status = await fetchSnapTradeStatus(proxy, snapTradeClientIdInput, snapTradeConsumerKeyInput)
+        if (!proxy) throw new Error('IBKR Flex requires the Cloudflare Worker proxy to avoid CORS.')
+        const xml = await fetchIbkrFlexXml(proxy, ibkrFlexTokenInput.trim(), ibkrFlexQueryIdInput.trim())
         setLmProxyUrl(proxy)
-        setSnapTradeClientId(snapTradeClientIdInput.trim() || null)
-        setSnapTradeConsumerKey(snapTradeConsumerKeyInput.trim() || null)
-        const upstream = status.upstream?.online === true ? 'online' : 'reachable'
-        setApiResult(service, { ok: true, message: `SnapTrade ${upstream}` })
+        setIbkrFlexToken(ibkrFlexTokenInput.trim() || null)
+        setIbkrFlexQueryId(ibkrFlexQueryIdInput.trim() || null)
+        const lotRows = (xml.match(/<OpenPosition\b/g) ?? []).length
+        setApiResult(service, { ok: true, message: `Flex query returned ${lotRows} open position row${lotRows === 1 ? '' : 's'}` })
       }
     } catch (err) {
       if (service === 'lunchmoney' && err instanceof LunchMoneyError) {
@@ -100,68 +100,6 @@ export default function Settings() {
     } finally {
       setTestingService(null)
     }
-  }
-
-  function exportConfig() {
-    const store = useAppStore.getState()
-    const data = {
-      profile: store.profile,
-      accounts: store.accounts,
-      pensions: store.pensions,
-      realEstateEvents: store.realEstateEvents,
-      expenses: store.expenses,
-      windfalls: store.windfalls,
-      monteCarloConfig: store.monteCarloConfig,
-      taxConfig: store.taxConfig,
-      dividendHistory: store.dividendHistory,
-      tiingoApiKey: store.tiingoApiKey,
-      fredApiKey: store.fredApiKey,
-      snapTradeClientId: store.snapTradeClientId,
-      snapTradeConsumerKey: store.snapTradeConsumerKey,
-      snapTradeUserId: store.snapTradeUserId,
-      snapTradeUserSecret: store.snapTradeUserSecret,
-    }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'dinner-money-config.json'
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  function importConfig(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        const data = JSON.parse(ev.target?.result as string)
-        const store = useAppStore.getState()
-        if (data.profile) store.setProfile(data.profile)
-        if (data.accounts) store.setAccounts(data.accounts)
-        if (data.pensions) store.setPensions(data.pensions)
-        if (data.realEstateEvents) store.setRealEstateEvents(data.realEstateEvents)
-        if (data.expenses) store.setExpenses(data.expenses)
-        if (data.windfalls) store.setWindfalls(data.windfalls)
-        if (data.monteCarloConfig) store.setMonteCarloConfig(data.monteCarloConfig)
-        if (data.taxConfig) store.setTaxConfig(data.taxConfig)
-        if (data.tiingoApiKey || data.avApiKey) store.setTiingoApiKey(data.tiingoApiKey ?? data.avApiKey)
-        if (data.fredApiKey) store.setFredApiKey(data.fredApiKey)
-        if (data.snapTradeClientId) store.setSnapTradeClientId(data.snapTradeClientId)
-        if (data.snapTradeConsumerKey) store.setSnapTradeConsumerKey(data.snapTradeConsumerKey)
-        if (data.snapTradeUserId || data.snapTradeUserSecret) store.setSnapTradeUser(data.snapTradeUserId ?? null, data.snapTradeUserSecret ?? null)
-        if (data.dividendHistory) {
-          Object.entries(data.dividendHistory as Record<string, any[]>).forEach(([ticker, divs]) =>
-            store.setTickerDividends(ticker, divs as any)
-          )
-        }
-        alert('Config imported successfully')
-      } catch {
-        alert('Failed to import — invalid JSON')
-      }
-    }
-    reader.readAsText(file)
   }
 
   return (
@@ -266,8 +204,8 @@ export default function Settings() {
                 })}
                 <tr>
                   <td className="px-3 py-2 align-top">
-                    <a href="https://dashboard.snaptrade.com/" target="_blank" rel="noreferrer" className="font-medium text-blue-600 dark:text-blue-400 hover:underline">
-                      SnapTrade
+                    <a href="https://www.interactivebrokers.com/en/software/am/am/reports/flex_queries.htm" target="_blank" rel="noreferrer" className="font-medium text-blue-600 dark:text-blue-400 hover:underline">
+                      IBKR
                     </a>
                   </td>
                   <td className="px-3 py-2 align-top min-w-[320px]">
@@ -275,38 +213,36 @@ export default function Settings() {
                       <input
                         type="password"
                         className="w-full h-[30px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                        value={snapTradeClientIdInput}
+                        value={ibkrFlexTokenInput}
                         onChange={event => {
-                          setSnapTradeClientIdInput(event.target.value)
+                          setIbkrFlexTokenInput(event.target.value)
                           setSavedService(null)
                         }}
-                        placeholder="Client ID"
+                        placeholder="Flex token"
                       />
                       <input
-                        type="password"
+                        type="text"
                         className="w-full h-[30px] border border-gray-300 dark:border-gray-600 rounded-[5px] px-2 text-[12px] bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                        value={snapTradeConsumerKeyInput}
+                        value={ibkrFlexQueryIdInput}
                         onChange={event => {
-                          setSnapTradeConsumerKeyInput(event.target.value)
+                          setIbkrFlexQueryIdInput(event.target.value)
                           setSavedService(null)
                         }}
-                        placeholder="Consumer key"
+                        placeholder="Query ID"
                       />
                     </div>
                   </td>
                   <td className="px-3 py-2 align-top text-gray-500 dark:text-gray-400">
-                    Brokerage holdings, positions, and tax lots
+                    Lot-level positions and cost basis
                   </td>
                   <td className="px-3 py-2 align-top min-w-[180px]">
-                    {testResults.snaptrade ? (
-                      <span className={testResults.snaptrade.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}>
-                        {testResults.snaptrade.ok ? '✓ ' : '✗ '}{testResults.snaptrade.message}
+                    {testResults['ibkr-flex'] ? (
+                      <span className={testResults['ibkr-flex'].ok ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}>
+                        {testResults['ibkr-flex'].ok ? '✓ ' : '✗ '}{testResults['ibkr-flex'].message}
                       </span>
-                    ) : snapTradeClientId && snapTradeConsumerKey ? (
-                      <span className="text-green-600 dark:text-green-400">
-                        ✓ Saved{snapTradeUserId && snapTradeUserSecret ? ' + user ready' : ''}
-                      </span>
-                    ) : savedService === 'snaptrade' ? (
+                    ) : ibkrFlexToken && ibkrFlexQueryId ? (
+                      <span className="text-green-600 dark:text-green-400">✓ Saved</span>
+                    ) : savedService === 'ibkr-flex' ? (
                       <span className="text-green-600 dark:text-green-400">✓ Saved</span>
                     ) : (
                       <span className="text-gray-400">Not configured</span>
@@ -315,17 +251,17 @@ export default function Settings() {
                   <td className="px-3 py-2 align-top">
                     <div className="flex justify-end gap-2">
                       <Button
-                        onClick={() => saveApiKey('snaptrade')}
-                        disabled={!snapTradeClientIdInput.trim() || !snapTradeConsumerKeyInput.trim()}
+                        onClick={() => saveApiKey('ibkr-flex')}
+                        disabled={!ibkrFlexTokenInput.trim() || !ibkrFlexQueryIdInput.trim()}
                       >
                         Save
                       </Button>
                       <Button
                         variant="success"
-                        onClick={() => testApiConnection('snaptrade')}
-                        disabled={testingService === 'snaptrade' || !snapTradeClientIdInput.trim() || !snapTradeConsumerKeyInput.trim()}
+                        onClick={() => testApiConnection('ibkr-flex')}
+                        disabled={testingService === 'ibkr-flex' || !ibkrFlexTokenInput.trim() || !ibkrFlexQueryIdInput.trim()}
                       >
-                        {testingService === 'snaptrade' ? 'Testing…' : 'Test'}
+                        {testingService === 'ibkr-flex' ? 'Testing…' : 'Test'}
                       </Button>
                     </div>
                   </td>
@@ -371,9 +307,7 @@ export default function Settings() {
             <p className="mt-2">
               The worker source is in{' '}
               <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">worker/lm-proxy.js</code>{' '}
-              in the repo. It is stateless and logs nothing. For SnapTrade, the worker signs requests server-side;
-              set <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">SNAPTRADE_CLIENT_ID</code> and{' '}
-              <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">SNAPTRADE_CONSUMER_KEY</code> as Worker secrets for the safest setup.
+              in the repo. It is stateless and logs nothing; IBKR Flex requests are proxied only to avoid browser CORS.
             </p>
           </details>
           <div className="flex gap-2">
@@ -425,28 +359,18 @@ export default function Settings() {
 
         <hr className="border-gray-200 dark:border-gray-700" />
 
-        {/* Data */}
+        {/* Cloud sync */}
         <section>
-          <h2 className="text-[13px] font-medium mb-3">Data</h2>
-          <div className="flex gap-2 flex-wrap">
-            <Button onClick={exportConfig}>Export config (JSON)</Button>
-            <label className="cursor-pointer">
-              <span className="inline-flex items-center rounded-[5px] border border-gray-300 dark:border-gray-600 px-[10px] py-[4px] text-[11.5px] text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
-                Import config
-              </span>
-              <input type="file" accept=".json" className="hidden" onChange={importConfig} />
-            </label>
-            <Button
-              variant="danger"
-              onClick={() => { if (confirm('Reset all data? This cannot be undone.')) localStorage.clear() }}
-            >
-              Reset all data
-            </Button>
-          </div>
+          <h2 className="text-[13px] font-medium mb-1">Cloud sync (Google Drive)</h2>
+          <p className="text-[11.5px] text-gray-500 dark:text-gray-400 mb-3">
+            Data is encrypted with AES-256-GCM in your browser before upload. Google never sees plaintext.
+            The passphrase is never transmitted — only you can decrypt the backup.
+          </p>
+          <DriveSync />
         </section>
 
         <Banner variant="info">
-          All data is stored locally in your browser (localStorage). Nothing is sent to any server.
+          All data is stored locally in your browser (localStorage). Cloud sync and local export/import are in the section above.
         </Banner>
       </div>
     </div>

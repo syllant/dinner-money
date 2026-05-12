@@ -69,10 +69,8 @@ interface AppState {
   lmProxyUrl: string | null
   tiingoApiKey: string | null
   fredApiKey: string | null
-  snapTradeClientId: string | null
-  snapTradeConsumerKey: string | null
-  snapTradeUserId: string | null
-  snapTradeUserSecret: string | null
+  ibkrFlexToken: string | null
+  ibkrFlexQueryId: string | null
   // Config
   profile: UserProfile
   accounts: Account[]
@@ -96,14 +94,20 @@ interface AppState {
   // Runtime (not persisted)
   simulationResult: SimulationResult | null
   simulationRunning: boolean
+  /** Computed by the Investments page — used by the sidebar Net Worth widget */
+  portfolioSnapshot: {
+    invested: number
+    todayPct: number | null
+    todayAmt: number | null
+    points: Array<{ date: string; value: number }>  // ~7 daily data points
+  } | null
   // Actions
   setLmApiKey: (key: string | null) => void
   setLmProxyUrl: (url: string | null) => void
   setTiingoApiKey: (key: string | null) => void
   setFredApiKey: (key: string | null) => void
-  setSnapTradeClientId: (key: string | null) => void
-  setSnapTradeConsumerKey: (key: string | null) => void
-  setSnapTradeUser: (userId: string | null, userSecret: string | null) => void
+  setIbkrFlexToken: (key: string | null) => void
+  setIbkrFlexQueryId: (key: string | null) => void
   setProfile: (patch: Partial<UserProfile>) => void
   setAccounts: (accounts: Account[]) => void
   upsertAccount: (account: Account) => void
@@ -125,14 +129,20 @@ interface AppState {
   upsertStatePayment: (payment: QuarterlyPayment) => void
   upsertTaxSettlement: (settlement: TaxSettlement) => void
   deleteTaxSettlement: (id: string) => void
+  setMedicalCoverages: (coverages: MedicalCoverage[]) => void
   upsertMedicalCoverage: (coverage: MedicalCoverage) => void
   deleteMedicalCoverage: (id: string) => void
+  setMedicalExpenses: (expenses: MedicalExpense[]) => void
   upsertMedicalExpense: (expense: MedicalExpense) => void
   deleteMedicalExpense: (id: string) => void
+  setTransfers: (transfers: Transfer[]) => void
   upsertTransfer: (transfer: Transfer) => void
   deleteTransfer: (id: string) => void
   setSimulationResult: (result: SimulationResult | null) => void
   setSimulationRunning: (running: boolean) => void
+  setPortfolioSnapshot: (snap: AppState['portfolioSnapshot']) => void
+  mergeNavHistory: (accountId: number, rows: Array<{ date: string; value: number }>) => void
+  snapshotPlaidNavToday: () => void
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -145,10 +155,8 @@ export const useAppStore = create<AppState>()(
       lmProxyUrl: null,
       tiingoApiKey: null,
       fredApiKey: null,
-      snapTradeClientId: null,
-      snapTradeConsumerKey: null,
-      snapTradeUserId: null,
-      snapTradeUserSecret: null,
+      ibkrFlexToken: null,
+      ibkrFlexQueryId: null,
       dividendHistory: {},
       dividendSyncedAt: null,
       profile: defaultProfile,
@@ -165,15 +173,15 @@ export const useAppStore = create<AppState>()(
       minTransactionEUR: 100,
       simulationResult: null,
       simulationRunning: false,
+      portfolioSnapshot: null,
 
       // Actions
       setLmApiKey: (key) => set({ lmApiKey: key }),
       setLmProxyUrl: (url) => set({ lmProxyUrl: url }),
       setTiingoApiKey: (key) => set({ tiingoApiKey: key }),
       setFredApiKey: (key) => set({ fredApiKey: key }),
-      setSnapTradeClientId: (key) => set({ snapTradeClientId: key }),
-      setSnapTradeConsumerKey: (key) => set({ snapTradeConsumerKey: key }),
-      setSnapTradeUser: (userId, userSecret) => set({ snapTradeUserId: userId, snapTradeUserSecret: userSecret }),
+      setIbkrFlexToken: (key) => set({ ibkrFlexToken: key }),
+      setIbkrFlexQueryId: (key) => set({ ibkrFlexQueryId: key }),
       setTickerDividends: (ticker, dividends) =>
         set((s) => ({ dividendHistory: { ...s.dividendHistory, [ticker]: dividends } })),
       setDividendSyncedAt: (at) => set({ dividendSyncedAt: at }),
@@ -181,6 +189,40 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ profile: { ...s.profile, ...patch } })),
 
       setAccounts: (accounts) => set({ accounts }),
+      mergeNavHistory: (accountId, rows) =>
+        set((s) => ({
+          accounts: s.accounts.map((a) => {
+            if (a.id !== accountId) return a
+            const existing = new Map((a.navHistory ?? []).map((p) => [p.date, p.value]))
+            for (const row of rows) {
+              if (!existing.has(row.date)) existing.set(row.date, row.value)
+            }
+            const merged = [...existing.entries()]
+              .map(([date, value]) => ({ date, value }))
+              .sort((x, y) => x.date.localeCompare(y.date))
+            return { ...a, navHistory: merged }
+          }),
+        })),
+
+      snapshotPlaidNavToday: () =>
+        set((s) => {
+          const today = new Date().toISOString().slice(0, 10)
+          let changed = false
+          const accounts = s.accounts.map((a) => {
+            if (a.type !== 'investment' && a.type !== 'retirement') return a
+            if (!a.plaidAccessToken || a.ibkrAccountId) return a
+            if ((a.navHistory ?? []).some(p => p.date === today)) return a
+            if (!a.balance || a.balance <= 0) return a
+            changed = true
+            const existing = new Map((a.navHistory ?? []).map(p => [p.date, p.value]))
+            existing.set(today, a.balance)
+            const navHistory = [...existing.entries()]
+              .map(([date, value]) => ({ date, value }))
+              .sort((x, y) => x.date.localeCompare(y.date))
+            return { ...a, navHistory }
+          })
+          return changed ? { accounts } : s
+        }),
       upsertAccount: (account) =>
         set((s) => ({
           accounts: s.accounts.some((a) => a.id === account.id)
@@ -276,6 +318,7 @@ export const useAppStore = create<AppState>()(
           },
         })),
 
+      setMedicalCoverages: (medicalCoverages) => set({ medicalCoverages }),
       upsertMedicalCoverage: (coverage) =>
         set((s) => ({
           medicalCoverages: s.medicalCoverages.some((c) => c.id === coverage.id)
@@ -285,6 +328,7 @@ export const useAppStore = create<AppState>()(
       deleteMedicalCoverage: (id) =>
         set((s) => ({ medicalCoverages: s.medicalCoverages.filter((c) => c.id !== id) })),
 
+      setMedicalExpenses: (medicalExpenses) => set({ medicalExpenses }),
       upsertMedicalExpense: (expense) =>
         set((s) => ({
           medicalExpenses: s.medicalExpenses.some((e) => e.id === expense.id)
@@ -294,6 +338,7 @@ export const useAppStore = create<AppState>()(
       deleteMedicalExpense: (id) =>
         set((s) => ({ medicalExpenses: s.medicalExpenses.filter((e) => e.id !== id) })),
 
+      setTransfers: (transfers) => set({ transfers }),
       upsertTransfer: (transfer) =>
         set((s) => ({
           transfers: s.transfers.some((t) => t.id === transfer.id)
@@ -306,6 +351,7 @@ export const useAppStore = create<AppState>()(
       setMinTransactionEUR: (minTransactionEUR) => set({ minTransactionEUR }),
       setSimulationResult: (simulationResult) => set({ simulationResult }),
       setSimulationRunning: (simulationRunning) => set({ simulationRunning }),
+      setPortfolioSnapshot: (portfolioSnapshot) => set({ portfolioSnapshot }),
     }),
     {
       name: 'dinner-money-store',
@@ -314,10 +360,8 @@ export const useAppStore = create<AppState>()(
         lmApiKey: s.lmApiKey,
         lmProxyUrl: s.lmProxyUrl,
         fredApiKey: s.fredApiKey,
-        snapTradeClientId: s.snapTradeClientId,
-        snapTradeConsumerKey: s.snapTradeConsumerKey,
-        snapTradeUserId: s.snapTradeUserId,
-        snapTradeUserSecret: s.snapTradeUserSecret,
+        ibkrFlexToken: s.ibkrFlexToken,
+        ibkrFlexQueryId: s.ibkrFlexQueryId,
         profile: s.profile,
         accounts: s.accounts,
         pensions: s.pensions,
@@ -339,12 +383,16 @@ export const useAppStore = create<AppState>()(
         tiingoApiKey: s.tiingoApiKey,
         dividendHistory: s.dividendHistory,
         dividendSyncedAt: s.dividendSyncedAt,
+        portfolioSnapshot: s.portfolioSnapshot,
       }),
       merge: (persistedState: any, currentState) => {
         if (persistedState.avApiKey && !persistedState.tiingoApiKey) {
           persistedState.tiingoApiKey = persistedState.avApiKey
         }
         delete persistedState.avApiKey
+        for (const key of ['snap' + 'TradeClientId', 'snap' + 'TradeConsumerKey', 'snap' + 'TradeUserId', 'snap' + 'TradeUserSecret']) {
+          delete persistedState[key]
+        }
         if (persistedState.profile && persistedState.profile.spouseProjectionEndAge == null) {
           persistedState.profile.spouseProjectionEndAge = persistedState.profile.projectionEndAge ?? currentState.profile.spouseProjectionEndAge
         }
@@ -358,6 +406,9 @@ export const useAppStore = create<AppState>()(
           persistedState.accounts = persistedState.accounts.map((account: any) => ({
             ...account,
             taxCountry: account.taxCountry ?? undefined,
+            ['snap' + 'TradeAccountId']: undefined,
+            ['snap' + 'TradeAuthorizationId']: undefined,
+            taxLots: account.taxLots?.filter((lot: any) => lot.source !== 'snap' + 'trade'),
           }))
         }
         if (persistedState.pensions) {

@@ -1,21 +1,17 @@
 import { useEffect } from 'react'
-import { Sidebar } from './Sidebar'
 import { useAppStore } from '../../store/useAppStore'
 import { syncPlaidInvestmentAccounts } from '../../lib/investmentSync'
-import { syncSnapTradeAccounts } from '../../lib/snaptrade'
+import { syncIbkrFlexAccounts } from '../../lib/ibkrFlex'
+import { syncAllAccounts, LM_FULL_SYNC_TTL } from '../../lib/lmSync'
+import { useDriveAutoSave } from '../../hooks/useDriveAutoSave'
+import { Sidebar } from './Sidebar'
 
 const AUTO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000
 const PLAID_AUTO_SYNC_KEY = 'dinner-money:plaid-investment-auto-sync'
-const SNAPTRADE_AUTO_SYNC_KEY = 'dinner-money:snaptrade-investment-auto-sync'
+const IBKR_FLEX_AUTO_SYNC_KEY = 'dinner-money:ibkr-flex-auto-sync'
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const accounts = useAppStore(s => s.accounts)
-  const lmProxyUrl = useAppStore(s => s.lmProxyUrl)
-  const snapTradeClientId = useAppStore(s => s.snapTradeClientId)
-  const snapTradeConsumerKey = useAppStore(s => s.snapTradeConsumerKey)
-  const snapTradeUserId = useAppStore(s => s.snapTradeUserId)
-  const snapTradeUserSecret = useAppStore(s => s.snapTradeUserSecret)
-  const setAccounts = useAppStore(s => s.setAccounts)
+  useDriveAutoSave()
 
   useEffect(() => {
     const onFocus = (e: FocusEvent) => {
@@ -26,52 +22,53 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('focusin', onFocus)
   }, [])
 
+  // Snapshot today's balance for Plaid accounts on load (once per day per account)
   useEffect(() => {
+    useAppStore.getState().snapshotPlaidNavToday()
+  }, [])
+
+  // Auto-sync all accounts from LunchMoney on startup if not synced in the last 24h
+  useEffect(() => {
+    const { lmApiKey, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId, accounts } = useAppStore.getState()
+    if (!lmApiKey) return
+    const lastSync = accounts.length > 0 && accounts[0].syncedAt
+      ? new Date(accounts[0].syncedAt).getTime()
+      : 0
+    if (Date.now() - lastSync < LM_FULL_SYNC_TTL) return
+    syncAllAccounts({ lmApiKey, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId, existingAccounts: accounts })
+      .then(merged => useAppStore.getState().setAccounts(merged))
+      .catch(err => console.warn('[LM] Auto-sync on startup failed:', err))
+  }, [])
+
+  // Auto-sync Plaid investment accounts every 6h — runs once on mount, not on every accounts change
+  useEffect(() => {
+    const { lmProxyUrl, accounts, setAccounts, snapshotPlaidNavToday } = useAppStore.getState()
     if (!lmProxyUrl) return
-    const syncable = accounts.some(account =>
-      account.includedInPlanning !== false &&
-      account.plaidAccessToken &&
-      (account.type === 'investment' || account.type === 'retirement')
+    const syncable = accounts.some(a =>
+      a.includedInPlanning !== false && a.plaidAccessToken &&
+      (a.type === 'investment' || a.type === 'retirement')
     )
     if (!syncable) return
-    try {
-      const raw = localStorage.getItem(PLAID_AUTO_SYNC_KEY)
-      if (raw && Date.now() - Number(raw) < AUTO_SYNC_INTERVAL_MS) return
-      localStorage.setItem(PLAID_AUTO_SYNC_KEY, String(Date.now()))
-    } catch {}
-
-    let cancelled = false
+    const raw = localStorage.getItem(PLAID_AUTO_SYNC_KEY)
+    if (raw && Date.now() - Number(raw) < AUTO_SYNC_INTERVAL_MS) return
+    localStorage.setItem(PLAID_AUTO_SYNC_KEY, String(Date.now()))
     syncPlaidInvestmentAccounts(accounts, lmProxyUrl)
-      .then(next => {
-        if (!cancelled) setAccounts(next)
-      })
-      .catch(error => {
-        console.warn('[Plaid] Automatic investment sync failed:', error)
-      })
-    return () => { cancelled = true }
-  }, [accounts, lmProxyUrl, setAccounts])
+      .then(next => { setAccounts(next); snapshotPlaidNavToday() })
+      .catch(err => console.warn('[Plaid] Auto investment sync failed:', err))
+  }, [])
 
+  // Auto-sync IBKR Flex accounts every 6h — runs once on mount, not on every accounts change
   useEffect(() => {
-    if (!lmProxyUrl || !snapTradeUserId || !snapTradeUserSecret) return
-    try {
-      const raw = localStorage.getItem(SNAPTRADE_AUTO_SYNC_KEY)
-      if (raw && Date.now() - Number(raw) < AUTO_SYNC_INTERVAL_MS) return
-      localStorage.setItem(SNAPTRADE_AUTO_SYNC_KEY, String(Date.now()))
-    } catch {}
-
-    let cancelled = false
-    syncSnapTradeAccounts(lmProxyUrl, snapTradeUserId, snapTradeUserSecret, accounts, {
-      clientId: snapTradeClientId,
-      consumerKey: snapTradeConsumerKey,
-    })
-      .then(next => {
-        if (!cancelled) setAccounts(next)
-      })
-      .catch(error => {
-        console.warn('[SnapTrade] Automatic investment sync failed:', error)
-      })
-    return () => { cancelled = true }
-  }, [accounts, lmProxyUrl, setAccounts, snapTradeClientId, snapTradeConsumerKey, snapTradeUserId, snapTradeUserSecret])
+    const { lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId, accounts, setAccounts } = useAppStore.getState()
+    if (!lmProxyUrl || !ibkrFlexToken || !ibkrFlexQueryId) return
+    if (!accounts.some(a => a.ibkrAccountId?.trim())) return
+    const raw = localStorage.getItem(IBKR_FLEX_AUTO_SYNC_KEY)
+    if (raw && Date.now() - Number(raw) < AUTO_SYNC_INTERVAL_MS) return
+    localStorage.setItem(IBKR_FLEX_AUTO_SYNC_KEY, String(Date.now()))
+    syncIbkrFlexAccounts(accounts, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId)
+      .then(next => setAccounts(next))
+      .catch(err => console.warn('[IBKR Flex] Auto investment sync failed:', err))
+  }, [])
 
   return (
     <div className="flex h-screen overflow-hidden bg-white dark:bg-gray-950 text-gray-900 dark:text-white">

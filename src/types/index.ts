@@ -55,7 +55,7 @@ export interface TaxLot {
   costBasis: number | null
   currency: string
   acquiredDate?: string
-  source: 'plaid' | 'snaptrade'
+  source: 'plaid' | 'ibkr-flex'
 }
 
 export interface PlaidDividend {
@@ -66,10 +66,23 @@ export interface PlaidDividend {
   date: string                 // YYYY-MM-DD
 }
 
+export type InvestmentEventType = 'buy' | 'sell' | 'transfer_in' | 'transfer_out'
+
+export interface InvestmentEvent {
+  date: string           // YYYY-MM-DD
+  type: InvestmentEventType
+  ticker: string | null
+  name: string
+  amount: number         // absolute amount in account native currency
+  currency: string
+  quantity?: number
+}
+
 export interface Account {
   id: number             // LunchMoney account ID
   lmId: number
   name: string
+  institutionName?: string
   balance: number
   currency: string       // ISO 4217, e.g. "usd", "eur"
   type: AccountType
@@ -85,11 +98,12 @@ export interface Account {
   // Plaid Integration
   plaidItemId?: string
   plaidAccessToken?: string
-  snapTradeAccountId?: string
-  snapTradeAuthorizationId?: string
+  ibkrAccountId?: string
   holdings?: PlaidHolding[]
   dividends?: PlaidDividend[]
+  investmentEvents?: InvestmentEvent[]
   taxLots?: TaxLot[]
+  navHistory?: Array<{ date: string; value: number }>  // daily NAV from IBKR EquitySummaryByReportDateInBase
 
   // Multi-currency override (e.g. IBKR reports all cash as CUR:USD but holds EUR too)
   fxSplitEUR?: number     // EUR amount held in this account (absolute, not a %)

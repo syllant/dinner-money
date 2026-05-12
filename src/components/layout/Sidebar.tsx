@@ -10,6 +10,7 @@ import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
 import { fetchEcbDailyExchangeRates, type EcbDailyRatePoint } from '../../lib/ecb'
 import { syncAllAccounts } from '../../lib/lmSync'
+import { InfoTooltip } from '../ui/InfoTooltip'
 
 function relativeTime(date: Date): string {
   const diffMs = Date.now() - date.getTime()
@@ -197,9 +198,9 @@ function SidebarSync({ onSyncComplete }: { onSyncComplete?: () => void }) {
   )
 }
 
-type SidebarRange = '1d' | '1w' | '1m'
-const SIDEBAR_RANGE_DAYS: Record<SidebarRange, number> = { '1d': 3, '1w': 10, '1m': 35 }
-const SIDEBAR_RANGE_POINTS: Record<SidebarRange, number> = { '1d': 2, '1w': 7, '1m': 30 }
+type SidebarRange = '1d' | '1w' | '1m' | '1y'
+const SIDEBAR_RANGE_DAYS: Record<SidebarRange, number> = { '1d': 3, '1w': 10, '1m': 35, '1y': 400 }
+const SIDEBAR_RANGE_POINTS: Record<SidebarRange, number> = { '1d': 2, '1w': 7, '1m': 30, '1y': 252 }
 
 const ECB_CACHE_KEY = 'dinner-money:ecb-fx-cache'
 const ECB_CACHE_TTL = 60 * 60 * 1000 // 1 hour
@@ -266,7 +267,7 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
 
     async function loadFx() {
       const start = new Date()
-      start.setDate(start.getDate() - SIDEBAR_RANGE_DAYS['1m']) // always fetch 1m to allow all ranges
+      start.setDate(start.getDate() - SIDEBAR_RANGE_DAYS['1y']) // always fetch 1y to allow all ranges
       try {
         const nextRows = await fetchEcbDailyExchangeRates(start.toISOString().slice(0, 10), lmProxyUrl)
         if (!cancelled) {
@@ -287,33 +288,45 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
   }, [lmProxyUrl, refreshKey])
 
   const slicedFx = useMemo(() => fxRows.slice(-SIDEBAR_RANGE_POINTS[range]), [fxRows, range])
-  const fxLatest = slicedFx.length > 0 ? slicedFx[slicedFx.length - 1].value : undefined
+  // Always show the most recent ECB rate regardless of selected range
+  const fxLatest = fxRows.length > 0 ? fxRows[fxRows.length - 1].value : undefined
+  const fxLatestDate = fxRows.length > 0 ? fxRows[fxRows.length - 1].date : undefined
   const fxFirst = slicedFx.length > 0 ? slicedFx[0].value : undefined
-  const isFxUp = fxLatest != null && fxFirst != null ? fxLatest > fxFirst : null
-  const fxColor = isFxUp == null ? '#9ca3af' : isFxUp ? '#16a34a' : '#dc2626'
+  // Color is always based on 7d comparison: higher than 7d ago = red (EUR strengthened), lower = green
+  const fx7dAgo = useMemo(() => {
+    if (fxRows.length === 0) return undefined
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7)
+    const cutoffStr = cutoff.toISOString().slice(0, 10)
+    const before = fxRows.filter(r => r.date <= cutoffStr)
+    return before.length > 0 ? before[before.length - 1].value : fxRows[0].value
+  }, [fxRows])
+  const isFxHigherThan7d = fxLatest != null && fx7dAgo != null ? fxLatest > fx7dAgo : null
+  const fxColor = isFxHigherThan7d == null ? '#9ca3af' : isFxHigherThan7d ? '#dc2626' : '#16a34a'
   const fxSparkline = useMemo(() => makeSparkline(slicedFx.map(r => r.value)), [slicedFx])
   const fxLastPoint = fxSparkline ? (() => { const p = fxSparkline.split(' '); return p.length ? p[p.length - 1].split(',') : null })() : null
 
   return (
     <div className="mx-[10px] mb-2">
-      {/* Range toggle */}
-      <div className="flex rounded-[5px] overflow-hidden border border-gray-200 dark:border-gray-700 mb-[6px]">
-        {(['1d', '1w', '1m'] as SidebarRange[]).map(r => (
-          <button key={r} onClick={() => setRange(r)}
-            className={clsx(
-              'flex-1 py-[2px] text-[9.5px] font-medium uppercase tracking-[0.05em] transition-colors',
-              r === range
-                ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200'
-                : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-            )}>
-            {r}
-          </button>
-        ))}
-      </div>
-
       <div className="rounded-[7px] border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/60 overflow-hidden">
+        {/* Range toggle — top right inside card */}
+        <div className="flex justify-end px-[9px] pt-[6px]">
+          <div className="flex rounded-[4px] overflow-hidden border border-gray-200 dark:border-gray-700">
+            {(['1d', '1w', '1m', '1y'] as SidebarRange[]).map(r => (
+              <button key={r} onClick={() => setRange(r)}
+                className={clsx(
+                  'px-[7px] py-[1.5px] text-[9px] font-medium uppercase tracking-[0.05em] transition-colors',
+                  r === range
+                    ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200'
+                    : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                )}>
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Portfolio section */}
-        <Link to="/investments" className="block px-[9px] py-[8px] hover:bg-white dark:hover:bg-gray-800 transition-colors">
+        <Link to="/investments" className="block px-[9px] py-[7px] hover:bg-white dark:hover:bg-gray-800 transition-colors">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em]">Portfolio</div>
@@ -321,9 +334,8 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
                 {snapshot ? `${sym}${fmtCompact(snapshot.invested)}` : '—'}
               </div>
               {todayPct != null && (
-                <div className="text-[10px] tabular-nums" style={{ color: portColor }}>
-                  {todayPct >= 0 ? '+' : ''}{(todayPct * 100).toFixed(2)}%
-                  {todayAmt != null && <span className="ml-0.5">({todayAmt >= 0 ? '+' : '−'}{sym}{fmtCompact(Math.abs(todayAmt))})</span>}
+                <div className="text-[10px] tabular-nums whitespace-nowrap" style={{ color: portColor }}>
+                  {todayPct >= 0 ? '+' : ''}{(todayPct * 100).toFixed(2)}%{todayAmt != null && ` (${todayAmt >= 0 ? '+' : '−'}${sym}${fmtCompact(Math.abs(todayAmt))})`}
                 </div>
               )}
             </div>
@@ -336,30 +348,33 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
           </div>
         </Link>
 
-        <div className="border-t border-gray-100 dark:border-gray-700" />
-
         {/* FX section */}
         <Link
           to="/currencies"
           aria-label={fxFirst == null ? 'EUR/USD unavailable.' : `EUR/USD. Was ${fxFirst.toFixed(4)} ${range} ago.`}
-          className="block px-[9px] py-[8px] hover:bg-white dark:hover:bg-gray-800 transition-colors"
+          className="block px-[9px] py-[7px] hover:bg-white dark:hover:bg-gray-800 transition-colors"
         >
           <div className="flex items-center justify-between gap-2">
             <div>
-              <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em]">EUR/USD</div>
+              <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em]">
+                EUR/USD
+              </div>
               <div className="text-[15px] font-medium tabular-nums text-gray-900 dark:text-white">
                 {fxLatest == null ? '—' : fxLatest.toFixed(4)}
               </div>
-              {syncedAt && (
-                <div className="text-[9px] text-gray-300 dark:text-gray-600">
-                  {syncedAt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                </div>
-              )}
             </div>
-            <svg width="76" height="30" viewBox="0 0 152 30" className="shrink-0 overflow-visible" aria-hidden="true">
-              <polyline points={fxSparkline} fill="none" stroke={fxColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-              {fxLastPoint && <circle cx={fxLastPoint[0]} cy={fxLastPoint[1]} r="4" fill={fxColor} />}
-            </svg>
+            <InfoTooltip
+              text={
+                `ECB reference rate${syncedAt ? ` fetched ${syncedAt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}${fxLatestDate ? ` (${fxLatestDate})` : ''}` +
+                (fxFirst != null ? `. Was ${fxFirst.toFixed(4)} ${range} ago` : '')
+              }
+              trigger={
+                <svg width="76" height="30" viewBox="0 0 152 30" className="shrink-0 overflow-visible" aria-hidden="true">
+                  <polyline points={fxSparkline} fill="none" stroke={fxColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                  {fxLastPoint && <circle cx={fxLastPoint[0]} cy={fxLastPoint[1]} r="4" fill={fxColor} />}
+                </svg>
+              }
+            />
           </div>
         </Link>
       </div>
