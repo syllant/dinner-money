@@ -1,5 +1,5 @@
 import type { Account } from '../types'
-import { computeAllocationFromHoldings, derivePlaidTaxLots, fetchPlaidHoldings, fetchPlaidInvestmentData } from './plaid'
+import { computeAllocationFromHoldings, derivePlaidTaxLots, fetchPlaidHoldings, fetchPlaidInvestmentData, fetchPlaidItemInstitutionBrand } from './plaid'
 
 export async function syncPlaidInvestmentAccount(account: Account, proxyUrl: string): Promise<Account> {
   if (!account.plaidAccessToken) return account
@@ -19,10 +19,28 @@ export async function syncPlaidInvestmentAccount(account: Account, proxyUrl: str
   } catch {
     // Holdings are still useful even if the brokerage does not expose transactions.
   }
+  let brandPatch: Partial<Account> = {}
+  if (account.logoSource !== 'manual' && !account.institutionLogoDataUrl) {
+    try {
+      const brand = await fetchPlaidItemInstitutionBrand(proxyUrl, account.plaidAccessToken)
+      if (brand) {
+        brandPatch = {
+          institutionId: brand.institutionId ?? account.institutionId,
+          institutionName: brand.institutionName ?? account.institutionName,
+          institutionLogoDataUrl: brand.logoDataUrl ?? account.institutionLogoDataUrl,
+          institutionPrimaryColor: brand.primaryColor ?? account.institutionPrimaryColor,
+          logoSource: brand.logoDataUrl ? 'plaid' : account.logoSource,
+        }
+      }
+    } catch {
+      // Branding is cosmetic; keep investment sync resilient when Plaid omits metadata.
+    }
+  }
   // Use Plaid's reported value as balance — more current than LunchMoney's cached value.
   const balance = annotatedHoldings.reduce((sum, h) => sum + h.institutionValue, 0)
   return {
     ...account,
+    ...brandPatch,
     balance: balance > 0 ? balance : account.balance,
     holdings: annotatedHoldings,
     taxLots: derivePlaidTaxLots(annotatedHoldings),

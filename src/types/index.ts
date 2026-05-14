@@ -83,6 +83,11 @@ export interface Account {
   lmId: number
   name: string
   institutionName?: string
+  institutionId?: string
+  institutionLogoUrl?: string
+  institutionLogoDataUrl?: string
+  institutionPrimaryColor?: string
+  logoSource?: 'plaid' | 'manual' | 'builtin' | 'none'
   balance: number
   currency: string       // ISO 4217, e.g. "usd", "eur"
   type: AccountType

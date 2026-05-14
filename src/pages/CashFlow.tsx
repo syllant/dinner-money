@@ -4,6 +4,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Card } from '../components/ui/Card'
 import { Banner } from '../components/ui/Banner'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
+import { AccountLogo } from '../components/ui/AccountLabel'
 import { formatCurrency, formatCompact } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
 import { buildCashProjection } from '../lib/cashProjection'
@@ -100,12 +101,13 @@ function fmtNative(v: number, sym: string): string {
 
 // ─── Month balance tooltip (shared by chart hover + date cell) ───────────────
 
-function MonthBalanceTooltip({ month }: { month: ProjectedMonth }) {
+function MonthBalanceTooltip({ month, accounts }: { month: ProjectedMonth; accounts: Account[] }) {
   const openMap = new Map(month.openingAccountBalances.map(a => [a.id, a]))
   const closeMap = new Map(month.accountBalances.map(a => [a.id, a]))
+  const accountById = new Map(accounts.map(account => [account.id, account]))
   const currencies = [...new Set(month.accountBalances.map(a => a.currency))].sort()
   return (
-    <div className="bg-gray-900 text-white text-[11px] px-3 py-2.5 rounded-lg shadow-xl border border-gray-700 w-[260px] pointer-events-none">
+    <div className="bg-gray-900 text-white text-[11px] px-3 py-2.5 rounded-lg shadow-xl border border-gray-700 w-[340px] pointer-events-none">
       <div className="font-semibold mb-1.5 pb-1 border-b border-gray-700 text-[11.5px]">{month.label}</div>
       <div className="flex justify-end gap-1 mb-1 text-[9px] text-gray-500">
         <span className="w-[48px] text-right">Start</span>
@@ -132,11 +134,15 @@ function MonthBalanceTooltip({ month }: { month: ProjectedMonth }) {
             </div>
             {openAccs.map(oa => {
               const ca = closeMap.get(oa.id) ?? openMap.get(oa.id)!
+              const account = accountById.get(oa.id)
               const oNative = toNative(oa.balanceEUR), cNative = toNative(ca.balanceEUR)
               const netNative = cNative - oNative
               return (
                 <div key={oa.id} className="flex items-center justify-between pl-3">
-                  <span className="text-gray-400 text-[10px] truncate max-w-[90px]">{oa.name}</span>
+                  <span className="text-gray-400 text-[10px] flex-1 min-w-0 inline-flex items-center gap-1.5">
+                    {account && <AccountLogo account={account} size="xs" />}
+                    <span className="truncate">{oa.name}</span>
+                  </span>
                   <div className="flex gap-1 shrink-0">
                     <span className={`tabular-nums text-[10px] w-[48px] text-right ${oNative >= 0 ? 'text-gray-300' : 'text-red-400'}`}>{fmtNative(Math.round(oNative), sym)}</span>
                     <span className={`tabular-nums text-[10px] w-[48px] text-right ${cNative >= 0 ? 'text-gray-300' : 'text-red-400'}`}>{fmtNative(Math.round(cNative), sym)}</span>
@@ -157,9 +163,10 @@ function MonthBalanceTooltip({ month }: { month: ProjectedMonth }) {
 const ROW_H = 26
 const HEADER_H = 28
 
-function VerticalBalanceChart({ rows, slotCounts }: {
+function VerticalBalanceChart({ rows, slotCounts, accounts }: {
   rows: Array<{ month: ProjectedMonth }>
   slotCounts: number[]
+  accounts: Account[]
 }) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
 
@@ -221,7 +228,7 @@ function VerticalBalanceChart({ rows, slotCounts }: {
       {/* Tooltip */}
       {hoveredRow != null && (
         <div className="absolute left-full ml-2 z-20" style={{ top: tooltipTop }}>
-          <MonthBalanceTooltip month={hoveredRow.month} />
+          <MonthBalanceTooltip month={hoveredRow.month} accounts={accounts} />
         </div>
       )}
       {/* Chart */}
@@ -290,9 +297,10 @@ function eventTypeOrder(ev: CashEvent): number {
   return 1                         // income
 }
 
-function ProjectionView({ projection, minTransactionEUR }: {
+function ProjectionView({ projection, minTransactionEUR, accounts }: {
   projection: ProjectedMonth[]
   minTransactionEUR: number
+  accounts: Account[]
 }) {
   if (projection.length === 0) return <p className="text-[12px] text-gray-400 py-2">No upcoming cash events in the selected period.</p>
 
@@ -324,7 +332,7 @@ function ProjectionView({ projection, minTransactionEUR }: {
   return (
     <div className="flex rounded-xl border border-gray-100 dark:border-gray-800 overflow-visible text-[12px]">
       {/* Chart — LEFT, aligned with rows */}
-      <VerticalBalanceChart rows={rows.map(r => ({ month: r.month }))} slotCounts={slotCounts} />
+      <VerticalBalanceChart rows={rows.map(r => ({ month: r.month }))} slotCounts={slotCounts} accounts={accounts} />
       {/* Table */}
       <div className="flex-1 min-w-0">
         <div style={{ height: HEADER_H }} className="flex items-center border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-[10.5px] text-gray-400">
@@ -345,7 +353,7 @@ function ProjectionView({ projection, minTransactionEUR }: {
                   <span className="relative inline-block group cursor-help">
                     <span className={`text-[11.5px] ${balanceColor || 'text-gray-500'}`}>{month.label}</span>
                     <span className="absolute bottom-full right-0 mb-1.5 hidden group-hover:block z-30 pointer-events-none">
-                      <MonthBalanceTooltip month={month} />
+                      <MonthBalanceTooltip month={month} accounts={accounts} />
                     </span>
                   </span>
                   {eurNet !== 0 && (
@@ -748,7 +756,7 @@ function PeriodBadge({ label, variant }: { label: string; variant: BadgeVariant 
 // ─── Cash column ──────────────────────────────────────────────────────────────
 
 function CashColumn({ currency, cash, monthDiff, firstNegative, projectionEndLabel,
-  monthLabel, openingBalances, closingBalances, zeroYieldWarning }: {
+  monthLabel, openingBalances, closingBalances, zeroYieldWarning, accounts }: {
   currency: 'EUR' | 'USD'
   cash: number
   monthDiff: number
@@ -758,10 +766,12 @@ function CashColumn({ currency, cash, monthDiff, firstNegative, projectionEndLab
   openingBalances: import('../lib/cashProjection').AccountBalance[]
   closingBalances: import('../lib/cashProjection').AccountBalance[]
   zeroYieldWarning?: string
+  accounts: Account[]
 }) {
   const isEUR = currency === 'EUR'
   const sym = isEUR ? '€' : '$'
   const toNative = (balEUR: number) => isEUR ? balEUR : balEUR * DEFAULT_EUR_USD_RATE
+  const accountById = new Map(accounts.map(account => [account.id, account]))
 
   const diffColor = monthDiff >= 0 ? 'text-emerald-600' : 'text-red-500'
   const diffLabel = `${monthDiff >= 0 ? '+' : ''}${formatCompact(monthDiff, currency)} this mo.`
@@ -811,12 +821,16 @@ function CashColumn({ currency, cash, monthDiff, firstNegative, projectionEndLab
           <div className="space-y-0.5">
             {openingBalances.map(ob => {
               const cb = closingBalances.find(c => c.id === ob.id)
+              const account = accountById.get(ob.id)
               const open = toNative(ob.balanceEUR)
               const close = toNative(cb?.balanceEUR ?? ob.balanceEUR)
               const net = close - open
               return (
                 <div key={ob.id} className="flex items-center text-[10.5px]">
-                  <span className="flex-1 truncate text-gray-600 dark:text-gray-300">{ob.name}</span>
+                  <span className="flex-1 min-w-0 inline-flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
+                    {account && <AccountLogo account={account} size="xs" />}
+                    <span className="truncate">{ob.name}</span>
+                  </span>
                   <span className={`w-[52px] text-right tabular-nums ${open >= 0 ? 'text-gray-500' : 'text-red-500'}`}>{fmtNative(Math.round(open), sym)}</span>
                   <span className={`w-[52px] text-right tabular-nums ${close >= 0 ? 'text-gray-500' : 'text-red-500'}`}>{fmtNative(Math.round(close), sym)}</span>
                   <span className={`w-[52px] text-right tabular-nums font-medium ${net >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{fmtNative(Math.round(net), sym)}</span>
@@ -1023,6 +1037,7 @@ export default function CashFlow() {
             openingBalances={eurOpenBals}
             closingBalances={eurCloseBals}
             zeroYieldWarning={eurZeroYieldWarning}
+            accounts={accounts}
           />
           <CashColumn
             currency="USD" cash={usdCash}
@@ -1032,6 +1047,7 @@ export default function CashFlow() {
             monthLabel={currentMonthLabel}
             openingBalances={usdOpenBals}
             closingBalances={usdCloseBals}
+            accounts={accounts}
           />
         </div>
 
@@ -1044,7 +1060,7 @@ export default function CashFlow() {
           <div className="flex gap-5 items-start">
             <div className="flex-1 min-w-0">
               {projection.length > 0
-                ? <ProjectionView projection={projection} minTransactionEUR={minTransactionEUR} />
+                ? <ProjectionView projection={projection} minTransactionEUR={minTransactionEUR} accounts={accounts} />
                 : <p className="text-[12px] text-gray-400 py-4 text-center">Configure expenses to see projection.</p>
               }
             </div>

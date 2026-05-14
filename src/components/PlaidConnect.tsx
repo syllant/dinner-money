@@ -3,6 +3,11 @@ import { usePlaidLink } from 'react-plaid-link'
 import { useAppStore } from '../store/useAppStore'
 import { confirmDelete } from '../lib/confirm'
 
+export interface PlaidLinkInstitution {
+  institutionId?: string
+  name?: string
+}
+
 export function PlaidConnect({
   isLinked,
   holdingsCount,
@@ -13,7 +18,7 @@ export function PlaidConnect({
   accountId: number
   isLinked: boolean
   holdingsCount?: number
-  onLinked: (accessToken: string, itemId: string) => void
+  onLinked: (accessToken: string, itemId: string, institution?: PlaidLinkInstitution) => void
   onUnlink: () => void
   onRefresh?: () => void
 }) {
@@ -57,7 +62,7 @@ export function PlaidConnect({
 
   const { open, ready } = usePlaidLink({
     token: linkToken ?? '',
-    onSuccess: async (public_token, _metadata) => {
+    onSuccess: async (public_token, metadata) => {
       setLoading(true)
       try {
         const res = await fetch(`${lmProxyUrl!.replace(/\/$/, '')}/plaid/item/public_token/exchange`, {
@@ -74,7 +79,13 @@ export function PlaidConnect({
           throw new Error(code + (errData?.error_message || `Exchange returned ${res.status}`))
         }
         const data = await res.json()
-        onLinked(data.access_token, data.item_id)
+        const institution = metadata.institution
+          ? {
+              institutionId: metadata.institution.institution_id,
+              name: metadata.institution.name,
+            }
+          : undefined
+        onLinked(data.access_token, data.item_id, institution)
       } catch (err: any) {
         setError(err.message || 'Token exchange failed')
       } finally {

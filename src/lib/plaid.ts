@@ -36,6 +36,42 @@ export async function fetchPlaidHoldings(proxyUrl: string, accessToken: string):
   })
 }
 
+export interface PlaidInstitutionBrand {
+  institutionId?: string
+  institutionName?: string
+  logoDataUrl?: string
+  primaryColor?: string
+}
+
+function plaidLogoDataUrl(logo: unknown): string | undefined {
+  if (typeof logo !== 'string' || !logo.trim()) return undefined
+  return logo.startsWith('data:') ? logo : `data:image/png;base64,${logo}`
+}
+
+export async function fetchPlaidInstitutionBrand(proxyUrl: string, institutionId: string): Promise<PlaidInstitutionBrand | null> {
+  if (!institutionId.trim()) return null
+  const data = await plaidPost(proxyUrl, '/institutions/get_by_id', {
+    institution_id: institutionId,
+    country_codes: ['US'],
+    options: { include_optional_metadata: true },
+  })
+  const institution = data.institution
+  if (!institution) return null
+  return {
+    institutionId: institution.institution_id ?? institutionId,
+    institutionName: institution.name,
+    logoDataUrl: plaidLogoDataUrl(institution.logo),
+    primaryColor: institution.primary_color,
+  }
+}
+
+export async function fetchPlaidItemInstitutionBrand(proxyUrl: string, accessToken: string): Promise<PlaidInstitutionBrand | null> {
+  const data = await plaidPost(proxyUrl, '/item/get', { access_token: accessToken })
+  const institutionId = data.item?.institution_id
+  if (typeof institutionId !== 'string' || !institutionId.trim()) return null
+  return fetchPlaidInstitutionBrand(proxyUrl, institutionId)
+}
+
 function plaidTicker(sec: any): string | null {
   const explicit = sec?.ticker_symbol ?? sec?.tickerSymbol ?? sec?.symbol
   if (typeof explicit === 'string' && explicit.trim()) return explicit.trim().toUpperCase()

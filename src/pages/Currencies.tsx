@@ -14,7 +14,7 @@ import { fetchEcbDailyExchangeRates, readEcbCache, writeEcbCache, ECB_CACHE_TTL 
 import { getCombinedEurUsdForecast, type ForecastPoint } from '../lib/currencyForecast'
 
 type PairMode = 'EURUSD' | 'USDEUR'
-type RangeKey = '1W' | '1M' | '1Y' | '2Y' | '5Y' | '10Y'
+type RangeKey = '1D' | '1W' | '1M' | '1Y' | '2Y' | '10Y'
 
 interface RatePoint {
   date: string
@@ -32,15 +32,16 @@ interface ChartRow {
 
 type ForecastSeriesKey = Exclude<keyof ChartRow, 'date'>
 
-const ranges: RangeKey[] = ['1W', '1M', '1Y', '2Y', '5Y', '10Y']
+const ranges: RangeKey[] = ['1D', '1W', '1M', '1Y', '2Y', '10Y']
+const forecastRange: RangeKey = '1Y'
 
 function startDateForRange(range: RangeKey) {
   const daysByRange: Record<RangeKey, number> = {
+    '1D': 1,
     '1W': 7,
     '1M': 31,
     '1Y': 365,
     '2Y': 365 * 2,
-    '5Y': 365 * 5,
     '10Y': 365 * 10,
   }
   const date = new Date()
@@ -115,11 +116,11 @@ function ForecastTooltip({ active, payload, label, mode }: {
 
 function rangeEndDate(range: RangeKey) {
   const daysByRange: Record<RangeKey, number> = {
+    '1D': 1,
     '1W': 7,
     '1M': 31,
     '1Y': 365,
     '2Y': 365 * 2,
-    '5Y': 365 * 5,
     '10Y': 365 * 10,
   }
   const date = new Date()
@@ -157,6 +158,49 @@ function HoverNote({ children, text }: { children: ReactNode; text: string }) {
   )
 }
 
+function PairToggle({ mode, onToggle }: { mode: PairMode; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="h-[28px] px-2 rounded-[5px] text-[12px] border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center gap-1.5"
+    >
+      <ArrowLeftRight size={13} />
+      {mode === 'EURUSD' ? 'EUR/USD' : 'USD/EUR'}
+    </button>
+  )
+}
+
+function ExtremaSummary({
+  min,
+  max,
+  mode,
+  trend,
+}: {
+  min: { date: string; value: number }
+  max: { date: string; value: number }
+  mode: PairMode
+  trend?: ReactNode
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <div className="text-[9px] uppercase text-gray-400 font-semibold tracking-normal">Low</div>
+        <div className="text-[15px] leading-tight font-semibold tabular-nums">{formatRate(min.value, mode)}</div>
+        <div className="text-[10px] leading-tight text-gray-400">{compactDate(min.date)}</div>
+      </div>
+      <div className="border-l border-gray-200 dark:border-gray-700 pl-3">
+        <div className="flex items-center justify-between gap-1">
+          <div className="text-[9px] uppercase text-gray-400 font-semibold tracking-normal">High</div>
+          {trend}
+        </div>
+        <div className="text-[15px] leading-tight font-semibold tabular-nums">{formatRate(max.value, mode)}</div>
+        <div className="text-[10px] leading-tight text-gray-400">{compactDate(max.date)}</div>
+      </div>
+    </div>
+  )
+}
+
 export default function Currencies() {
   const { lmProxyUrl } = useAppStore()
   const [mode, setMode] = useState<PairMode>('EURUSD')
@@ -165,7 +209,7 @@ export default function Currencies() {
   const [forecasts, setForecasts] = useState<ForecastPoint[]>([])
   const [historicalLoading, setHistoricalLoading] = useState(false)
   const [forecastLoading, setForecastLoading] = useState(false)
-  const [refreshNonce, setRefreshNonce] = useState(0)
+  const toggleMode = () => setMode(current => current === 'EURUSD' ? 'USDEUR' : 'EURUSD')
 
   useEffect(() => {
     let cancelled = false
@@ -179,18 +223,12 @@ export default function Currencies() {
         if (sliced.length > 0 && !cancelled) {
           setRates(sliced.map(row => ({ date: row.date, rate: row.value })))
         }
-        // Skip network fetch if cache is from today and fresh (within TTL) and not a forced refresh
+        // Skip network fetch only when the cache is fresh and spans the selected historical range.
         const cacheAge = Date.now() - new Date(cached.fetchedAt).getTime()
         const cacheIsToday = new Date(cached.fetchedAt).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
-        if (refreshNonce === 0 && cacheIsToday && cacheAge < ECB_CACHE_TTL) {
+        const cacheCoversStart = cached.rows[0]?.date <= startDate
+        if (cacheIsToday && cacheAge < ECB_CACHE_TTL && cacheCoversStart) {
           if (!cancelled) setHistoricalLoading(false)
-          if (cancelled) return
-          setForecastLoading(true)
-          try {
-            const forecast = await getCombinedEurUsdForecast({ proxyUrl: lmProxyUrl })
-            if (!cancelled) setForecasts(forecast.points)
-          } catch { if (!cancelled) setForecasts([]) }
-          if (!cancelled) setForecastLoading(false)
           return
         }
       }
@@ -212,19 +250,24 @@ export default function Currencies() {
       }
 
       if (!cancelled) setHistoricalLoading(false)
-      if (cancelled) return
+    }
+    load()
+    return () => { cancelled = true }
+  }, [lmProxyUrl, range])
 
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
       setForecastLoading(true)
       try {
         const forecast = await getCombinedEurUsdForecast({ proxyUrl: lmProxyUrl })
         if (!cancelled) setForecasts(forecast.points)
       } catch { if (!cancelled) setForecasts([]) }
-
       if (!cancelled) setForecastLoading(false)
     }
     load()
     return () => { cancelled = true }
-  }, [lmProxyUrl, range, refreshNonce])
+  }, [lmProxyUrl])
 
   const historicalRows = useMemo(() => rates.map(point => ({
     date: point.date,
@@ -265,10 +308,10 @@ export default function Currencies() {
   }, [forecasts, mode])
 
   const visibleForecastRows = useMemo(() => {
-    const cutoff = rangeEndDate(range)
+    const cutoff = rangeEndDate(forecastRange)
     const inRange = forecastRows.filter(row => row.date <= cutoff)
     return inRange.length > 0 ? inRange : forecastRows
-  }, [forecastRows, range])
+  }, [forecastRows])
   const historicalDomain = useMemo(() => paddedDomain(historicalRows.map(row => row.rate)), [historicalRows])
   const forecastDomain = useMemo(() => paddedDomain(visibleForecastRows.flatMap(row => [
     row.tradingEconomics,
@@ -314,46 +357,13 @@ export default function Currencies() {
       text: `Was ${formatRate(priorEurUsd, 'EURUSD')} yesterday.`,
     }
   }, [latestEurUsd, priorEurUsd])
-  const loading = historicalLoading || forecastLoading
 
   return (
     <div>
-      <PageHeader title="Currency">
-        <button
-          type="button"
-          onClick={() => setMode(mode === 'EURUSD' ? 'USDEUR' : 'EURUSD')}
-          className="h-[28px] px-2 rounded-[5px] text-[12px] border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center gap-1.5"
-        >
-          <ArrowLeftRight size={13} />
-          {mode === 'EURUSD' ? 'EUR/USD' : 'USD/EUR'}
-        </button>
-        <div className="flex rounded-[6px] border border-gray-200 dark:border-gray-700 overflow-hidden">
-          {ranges.map(item => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setRange(item)}
-              className={clsx(
-                'h-[28px] px-2 text-[11px] border-r border-gray-200 dark:border-gray-700 last:border-r-0',
-                range === item ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'hover:bg-gray-50 dark:hover:bg-gray-800'
-              )}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => setRefreshNonce(n => n + 1)}
-          className="h-[28px] px-2 rounded-[5px] text-[12px] border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 flex items-center gap-1.5"
-        >
-          <RefreshCw size={13} className={clsx(loading && 'animate-spin')} />
-          Refresh
-        </button>
-      </PageHeader>
+      <PageHeader title="Currency" />
 
       <div className="p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-[220px_260px_260px] gap-3 justify-start">
           <MetricCard
             label={`Current rate${latestDate ? ` (${latestDate})` : ''}`}
             value={
@@ -375,25 +385,34 @@ export default function Currencies() {
           />
           <MetricCard
             label={`Range (${startDateForRange(range)} to ${latestDate ?? '—'})`}
-            value={historicalExtrema ? `${formatRate(historicalExtrema.min.rate, mode)} / ${formatRate(historicalExtrema.max.rate, mode)}` : '—'}
-            sub={historicalExtrema ? `${historicalExtrema.min.date} / ${historicalExtrema.max.date}` : '—'}
+            value={historicalExtrema ? (
+              <ExtremaSummary
+                min={{ date: historicalExtrema.min.date, value: historicalExtrema.min.rate }}
+                max={{ date: historicalExtrema.max.date, value: historicalExtrema.max.rate }}
+                mode={mode}
+              />
+            ) : '—'}
+            valueClass="text-gray-900 dark:text-white"
             tooltip="Minimum and maximum historical rates in the selected date range."
           />
           <MetricCard
             label="Forecast"
-            value={
-              <span className="inline-flex items-center gap-2">
-                <span>{forecastSummary ? `${formatRate(forecastSummary.min.value, mode)} / ${formatRate(forecastSummary.max.value, mode)}` : '—'}</span>
-                {trend && (
+            value={forecastSummary ? (
+              <ExtremaSummary
+                min={forecastSummary.min}
+                max={forecastSummary.max}
+                mode={mode}
+                trend={trend && (
                   <span className={clsx('inline-flex items-center', trend.direction === 'up' ? 'text-red-500' : 'text-green-600')}>
                     <HoverNote text={trend.text}>
                       {trend.direction === 'up' ? <ArrowUpRight size={13} /> : trend.direction === 'down' ? <ArrowDownRight size={13} /> : null}
                     </HoverNote>
                   </span>
                 )}
-              </span>
-            }
-            sub={forecastSummary ? `(${forecastSummary.min.date} / ${forecastSummary.max.date})` : 'No forecast points'}
+              />
+            ) : '—'}
+            sub={forecastSummary ? undefined : 'No forecast points'}
+            valueClass="text-gray-900 dark:text-white"
             tooltip="Minimum and maximum values shown in the forecast chart. Trend compares the ECB SPF median to the current displayed spot rate."
           />
         </div>
@@ -404,6 +423,24 @@ export default function Currencies() {
               <ChartTitle tooltip="Historical chart uses ECB daily USD per EUR reference rates. The toggle inverts displayed values for USD to EUR.">
                 Historical {pairLabel}
               </ChartTitle>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <PairToggle mode={mode} onToggle={toggleMode} />
+              <div className="flex rounded-[6px] border border-gray-200 dark:border-gray-700 overflow-hidden">
+                {ranges.map(item => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setRange(item)}
+                    className={clsx(
+                      'h-[28px] px-2 text-[11px] border-r border-gray-200 dark:border-gray-700 last:border-r-0',
+                      range === item ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'hover:bg-gray-50 dark:hover:bg-gray-800'
+                    )}
+                  >
+                    {item.toLowerCase()}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -435,10 +472,13 @@ export default function Currencies() {
         </Card>
 
         <Card>
-          <div className="flex items-center gap-1.5 mb-3">
-            <ChartTitle tooltip="Combines point-like values only: Trading Economics model forecast, ECB SPF survey assumptions, and Euro FX futures. Prediction markets are shown separately as event probabilities.">
-              Forecast
-            </ChartTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-1.5">
+              <ChartTitle tooltip="Combines point-like values only: Trading Economics model forecast, ECB SPF survey assumptions, and Euro FX futures. Prediction markets are shown separately as event probabilities.">
+                Forecast (1y)
+              </ChartTitle>
+            </div>
+            <PairToggle mode={mode} onToggle={toggleMode} />
           </div>
           <div className="h-[320px]">
             {visibleForecastRows.length === 0 ? (

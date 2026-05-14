@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import type { AccountType } from '../../types'
+import { AccountLabel, AccountLogo } from './AccountLabel'
 
 // Account types that make sense as a source or destination for money flows
 const FLOW_TYPES: AccountType[] = ['cash', 'investment', 'retirement']
@@ -47,7 +48,11 @@ export function AccountSelect({
     .filter(a => a.includedInPlanning !== false)
     .filter(a => allowedTypes.includes(a.type))
     .filter(a => !currency || a.currency.toUpperCase() === currency.toUpperCase())
-    .filter(a => !query || a.name.toLowerCase().includes(query.toLowerCase()))
+    .filter(a => {
+      if (!query) return true
+      const q = query.toLowerCase()
+      return a.name.toLowerCase().includes(q) || (a.institutionName ?? '').toLowerCase().includes(q)
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 
   function pick(id: number | undefined) {
@@ -67,12 +72,17 @@ export function AccountSelect({
       <label className="text-[11px] text-gray-500">{label}</label>
       <div className="relative">
         <input
-          className="h-[32px] w-full border border-gray-300 dark:border-gray-600 rounded-[5px] px-3 pr-7 text-[12px] bg-white dark:bg-gray-800 truncate"
+          className={`h-[32px] w-full border border-gray-300 dark:border-gray-600 rounded-[5px] ${selected && !open ? 'pl-9' : 'pl-3'} pr-7 text-[12px] bg-white dark:bg-gray-800 truncate`}
           value={displayValue}
           placeholder={open ? 'Type to filter…' : placeholder}
           onFocus={() => { setOpen(true); setQuery('') }}
           onChange={e => { setQuery(e.target.value); setOpen(true) }}
         />
+        {selected && !open && (
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2">
+            <AccountLogo account={selected} size="xs" />
+          </span>
+        )}
         {value != null && !open && (
           <button
             type="button"
@@ -100,7 +110,7 @@ export function AccountSelect({
                 className={`px-3 py-[7px] text-[12px] cursor-pointer flex items-center justify-between gap-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${a.id === value ? 'bg-blue-50 dark:bg-blue-900/20 font-medium' : ''}`}
                 onMouseDown={e => { e.preventDefault(); pick(a.id) }}
               >
-                <span className="truncate">{a.name}</span>
+                <AccountLabel account={a} size="xs" className="flex-1" />
                 <span className="text-[10px] text-gray-400 shrink-0">{a.currency.toUpperCase()} · {a.type}</span>
               </div>
             ))}

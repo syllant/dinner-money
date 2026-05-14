@@ -7,6 +7,7 @@ import { Button } from '../components/ui/Button'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Banner } from '../components/ui/Banner'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
+import { AccountLogo } from '../components/ui/AccountLabel'
 import { RecurringIcon, OneTimeIcon } from '../components/ui/FrequencyDisplay'
 import { formatCompact, formatCurrency } from '../lib/format'
 import { DEFAULT_EUR_USD_RATE, convertToBase } from '../lib/currency'
@@ -336,6 +337,11 @@ interface AnnualItem { label: string; amount: number; currency: string }
 interface ProjectedAccount {
   id: number
   name: string
+  institutionName?: string
+  institutionLogoUrl?: string
+  institutionLogoDataUrl?: string
+  logoSource?: Account['logoSource']
+  ibkrAccountId?: string
   type: Account['type']
   currency: string
   amountBase: number
@@ -635,7 +641,10 @@ function NWDetailsTooltip({ title, accounts, total, currency = 'EUR' }: {
       </div>
       {sortedAccounts.length > 0 ? sortedAccounts.map(acc => (
         <div key={acc.id} className="flex items-start gap-2">
-          <span className="text-gray-300 flex-1 min-w-0 truncate">{acc.name}</span>
+          <span className="text-gray-300 flex-1 min-w-0 inline-flex items-center gap-1.5">
+            <AccountLogo account={acc} size="xs" />
+            <span className="truncate">{acc.name}</span>
+          </span>
           <span className="text-white shrink-0 font-medium">
             <span className="tabular-nums">{formatCurrency(acc.amountNative, acc.currency)}</span>
           </span>
@@ -1069,6 +1078,11 @@ function projectedAccountsForYear(
       return {
         id: acc.id,
         name: acc.name,
+        institutionName: acc.institutionName,
+        institutionLogoUrl: acc.institutionLogoUrl,
+        institutionLogoDataUrl: acc.institutionLogoDataUrl,
+        logoSource: acc.logoSource,
+        ibkrAccountId: acc.ibkrAccountId,
         type: acc.type,
         currency: acc.currency,
         amountBase,
@@ -1563,6 +1577,11 @@ function ProjectionViews({
     .map(account => ({
       id: account.id,
       name: account.name,
+      institutionName: account.institutionName,
+      institutionLogoUrl: account.institutionLogoUrl,
+      institutionLogoDataUrl: account.institutionLogoDataUrl,
+      logoSource: account.logoSource,
+      ibkrAccountId: account.ibkrAccountId,
       type: account.type,
       currency: account.currency,
       amountBase: convertToBase(account.balance, account.currency, displayCurrency, fxRate),

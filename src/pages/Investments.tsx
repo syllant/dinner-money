@@ -7,6 +7,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { MetricCard } from '../components/ui/MetricCard'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
 import { Card } from '../components/ui/Card'
+import { AccountLabel, AccountLogo } from '../components/ui/AccountLabel'
 import { formatCompact, formatCurrency } from '../lib/format'
 import { convertToBase } from '../lib/currency'
 import { projectedAnnualDividendsEUR } from '../lib/dividends'
@@ -296,7 +297,7 @@ function AccountFilter({
                   onChange={() => toggle(a.id)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <span className="text-[11px] text-gray-700 dark:text-gray-300 flex-1 truncate">{a.name}</span>
+                <AccountLabel account={a} size="xs" className="flex-1 text-[11px] text-gray-700 dark:text-gray-300" />
                 {firstDate && (
                   <span className="text-[9.5px] text-gray-400 tabular-nums shrink-0">from {firstDate.slice(0, 7)}</span>
                 )}
@@ -2007,7 +2008,10 @@ export default function Investments() {
                                 const acct = portfolioAccounts.find(a => a.id === acctId)
                                 return (
                                   <div key={i} className="flex justify-between gap-3 text-[10px]">
-                                    <span style={{ color: p.fill }}>{acct?.name ?? p.dataKey}</span>
+                                    <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: p.fill }}>
+                                      {acct && <AccountLogo account={acct} size="xs" />}
+                                      <span className="truncate">{acct?.name ?? p.dataKey}</span>
+                                    </span>
                                     <span>{formatCurrency(p.value as number, profile.baseCurrency)}</span>
                                   </div>
                                 )
@@ -2105,7 +2109,10 @@ export default function Investments() {
                                 const acct = accId != null ? portfolioAccounts.find(a => a.id === accId) : null
                                 return (
                                   <div key={i} className="flex justify-between gap-3">
-                                    <span style={{ color: p.stroke }}>{isspy ? 'SPY' : (acct?.name ?? p.dataKey)}</span>
+                                    <span className="inline-flex items-center gap-1.5 min-w-0" style={{ color: p.stroke }}>
+                                      {acct && <AccountLogo account={acct} size="xs" />}
+                                      <span className="truncate">{isspy ? 'SPY' : (acct?.name ?? p.dataKey)}</span>
+                                    </span>
                                     <span className={chartMode === '$' ? '' : returnClass(p.value as number)}>
                                       {chartMode === '$'
                                         ? formatCurrency(p.value as number, profile.baseCurrency)
@@ -2177,12 +2184,20 @@ export default function Investments() {
                         const port = (payload as any[]).find((p) => p.dataKey === (chartMode === '$' ? 'portfolioValue' : 'portfolio'))
                         const spy = chartMode === '%' ? (payload as any[]).find((p) => p.dataKey === 'spy') : null
                         const evts = portfolioEventsByDate.get(label as string) ?? []
+                        const tooltipAccounts = portfolioAccounts.filter(account => selectedAccountIds === null || selectedAccountIds.has(account.id))
                         return (
                           <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl min-w-[160px]">
                             <div className="text-gray-400 mb-1">{fmtChartDate(label as string)}</div>
                             {port && port.value != null && (
                               <div className="flex justify-between gap-3">
-                                <span className="text-blue-400">Portfolio</span>
+                                <span className="text-blue-400 inline-flex items-center gap-1.5 min-w-0">
+                                  <span className="inline-flex -space-x-1">
+                                    {tooltipAccounts.slice(0, 3).map(account => (
+                                      <AccountLogo key={account.id} account={account} size="xs" />
+                                    ))}
+                                  </span>
+                                  <span>Portfolio</span>
+                                </span>
                                 <span className={chartMode === '$' ? '' : returnClass(port.value as number)}>
                                   {chartMode === '$'
                                     ? formatCurrency(port.value as number, profile.baseCurrency)
@@ -2373,7 +2388,7 @@ export default function Investments() {
                       <div key={a.id} className="flex items-center py-[5px] border-b border-gray-100 dark:border-gray-700 last:border-0 text-[11px] gap-1">
                         {/* Name + badges */}
                         <div className="flex-1 min-w-0">
-                          <div className="truncate text-gray-800 dark:text-gray-200">{a.name}</div>
+                          <AccountLabel account={a} size="xs" className="text-gray-800 dark:text-gray-200" />
                           <div className="flex items-center gap-1 mt-[2px] flex-wrap">
                             <span className="text-[9.5px] text-gray-400 capitalize">{a.type}</span>
                             {a.ibkrAccountId && (

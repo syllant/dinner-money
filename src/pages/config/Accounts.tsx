@@ -9,9 +9,11 @@ import { SortBtn, useSort } from '../../components/ui/SortBtn'
 import { formatCurrency } from '../../lib/format'
 import { PlaidConnect } from '../../components/PlaidConnect'
 import { syncPlaidInvestmentAccount } from '../../lib/investmentSync'
+import { fetchPlaidInstitutionBrand } from '../../lib/plaid'
 import { fetchIbkrFlexXml, parseIbkrFlexAccountIds, syncIbkrFlexAccounts } from '../../lib/ibkrFlex'
 import { EditIcon } from '../../components/ui/Icons'
 import { CUR_BADGE, curBadgeClass, curSymbol } from '../../components/ui/FrequencyDisplay'
+import { AccountLogo } from '../../components/ui/AccountLabel'
 import type { Account, Country } from '../../types'
 import type { TaxLot } from '../../types'
 
@@ -407,6 +409,177 @@ function CharacteristicsEdit({ acc, onUpdate }: { acc: Account; onUpdate: (patch
   return null
 }
 
+function readLogoFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Choose an image file.'))
+      return
+    }
+    if (file.size > 2_000_000) {
+      reject(new Error('Choose an image under 2 MB.'))
+      return
+    }
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      const size = 96
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        URL.revokeObjectURL(url)
+        reject(new Error('Could not process this image.'))
+        return
+      }
+      ctx.clearRect(0, 0, size, size)
+      const scale = Math.min(size / image.width, size / image.height)
+      const width = image.width * scale
+      const height = image.height * scale
+      ctx.drawImage(image, (size - width) / 2, (size - height) / 2, width, height)
+      URL.revokeObjectURL(url)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Could not read this image.'))
+    }
+    image.src = url
+  })
+}
+
+function logoUrlFromWebsite(raw: string): string {
+  const trimmed = raw.trim()
+  const url = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(url.hostname)}&sz=128`
+}
+
+function LogoButton({ account, onClick }: { account: Account; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={event => {
+        event.stopPropagation()
+        onClick()
+      }}
+      className="shrink-0 rounded-[5px] focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+      aria-label={`Change logo for ${account.name}`}
+    >
+      <AccountLogo account={account} size="sm" />
+    </button>
+  )
+}
+
+function LogoModal({ account, onClose, onSave }: {
+  account: Account
+  onClose: () => void
+  onSave: (patch: Partial<Account>) => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [website, setWebsite] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  function saveWebsite() {
+    setError(null)
+    try {
+      const logoUrl = logoUrlFromWebsite(website)
+      onSave({
+        institutionLogoUrl: logoUrl,
+        institutionLogoDataUrl: undefined,
+        logoSource: 'manual',
+      })
+      onClose()
+    } catch {
+      setError('Enter a valid website, for example interactivebrokers.com.')
+    }
+  }
+
+  async function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setError(null)
+    try {
+      const dataUrl = await readLogoFile(file)
+      onSave({
+        institutionLogoDataUrl: dataUrl,
+        institutionLogoUrl: undefined,
+        logoSource: 'manual',
+      })
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 px-4 py-8" onMouseDown={onClose}>
+      <div className="w-full max-w-sm rounded-[8px] bg-white dark:bg-gray-900 shadow-2xl border border-gray-200 dark:border-gray-700" onMouseDown={event => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-2 min-w-0">
+            <AccountLogo account={account} size="md" />
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-gray-800 dark:text-gray-100 truncate">{account.name}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {(account.institutionLogoDataUrl || account.institutionLogoUrl || account.logoSource === 'manual') && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSave({ institutionLogoDataUrl: undefined, institutionLogoUrl: undefined, logoSource: undefined })
+                  onClose()
+                }}
+                className="text-[11px] font-medium text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+              >
+                Reset
+              </button>
+            )}
+          <button type="button" onClick={onClose} className="h-[28px] px-2 rounded-[5px] text-[11px] font-medium text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800">
+            Close
+          </button>
+          </div>
+        </div>
+
+        <div className="p-4 space-y-3">
+          <label className="block space-y-1">
+            <span className="text-[11px] text-gray-500 dark:text-gray-400">Fetch the logo from the provider website:</span>
+            <div className="flex gap-2">
+              <input
+                className="h-[32px] flex-1 min-w-0 border border-gray-300 dark:border-gray-600 rounded-[5px] px-2.5 text-[12px] bg-white dark:bg-gray-800"
+                value={website}
+                onChange={event => setWebsite(event.target.value)}
+                placeholder="interactivebrokers.com"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={saveWebsite}
+                disabled={!website.trim()}
+                className="h-[32px] px-3 rounded-[5px] bg-blue-600 text-white text-[11.5px] font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Fetch
+              </button>
+            </div>
+          </label>
+
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="h-[30px] px-3 rounded-[5px] border border-gray-300 dark:border-gray-600 text-[11.5px] hover:bg-gray-50 dark:hover:bg-gray-800"
+            >
+              Upload file
+            </button>
+          </div>
+          <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={onFileChange} />
+          {error && <div className="text-[10.5px] text-red-500 dark:text-red-400">{error}</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Accounts() {
   const {
     lmApiKey, lmProxyUrl, accounts, setAccounts, upsertAccount,
@@ -418,6 +591,7 @@ export default function Accounts() {
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
   const [syncStatusAccountId, setSyncStatusAccountId] = useState<number | null>(null)
   const [editing, setEditing] = useState<Account | null>(null)
+  const [logoAccount, setLogoAccount] = useState<Account | null>(null)
   const [lotDetailsAccount, setLotDetailsAccount] = useState<Account | null>(null)
   const [showIbkr, setShowIbkr] = useState(false)
   const [ibkrAccountIds, setIbkrAccountIds] = useState<string[]>([])
@@ -610,7 +784,10 @@ export default function Accounts() {
               <TableRow key={acc.id} dimmed={!included}>
                 <div className={`grid ${COLS} gap-2 items-center`}>
                   <span className="font-medium truncate flex items-center gap-1.5 min-w-0">
-                    <span className="truncate">{acc.name}</span>
+                    <span className="inline-flex items-center gap-1.5 min-w-0">
+                      <LogoButton account={acc} onClick={() => setLogoAccount(acc)} />
+                      <span className="truncate">{acc.name}</span>
+                    </span>
                     {acc.ibkrAccountId && (
                       <ProviderBadge provider="ibkr-flex" health={providerHealth(acc, 'ibkr-flex', syncing && syncAccountId === acc.id, syncStatusAccountId === acc.id ? syncStatus : null)} />
                     )}
@@ -665,7 +842,6 @@ export default function Accounts() {
                           <option value="other">Other</option>
                         </select>
                       </div>
-                      <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 shrink-0" />
                       <div className="flex items-center gap-1.5 text-[11px]">
                         <span className="text-gray-500">Tax domicile</span>
                         <select className="h-[26px] text-[11px] border border-gray-300 dark:border-gray-600 rounded px-1.5 bg-white dark:bg-gray-800" value={eAcc.taxCountry ?? ''} onChange={e => setEditing({ ...eAcc, taxCountry: e.target.value ? e.target.value as Country : undefined })}>
@@ -709,8 +885,31 @@ export default function Accounts() {
                         setEditing(updated)
                         if (accountId && ibkrConfigured) void refreshIbkrFlex(updated)
                       }
-                      const plaidOnLinked = async (token: string, itemId: string) => {
-                        const updated = { ...eAcc, plaidAccessToken: token, plaidItemId: itemId }
+                      const plaidOnLinked = async (token: string, itemId: string, institution?: { institutionId?: string; name?: string }) => {
+                        let updated: Account = {
+                          ...eAcc,
+                          plaidAccessToken: token,
+                          plaidItemId: itemId,
+                          institutionId: institution?.institutionId ?? eAcc.institutionId,
+                          institutionName: institution?.name ?? eAcc.institutionName,
+                        }
+                        if (lmProxyUrl && institution?.institutionId && eAcc.logoSource !== 'manual') {
+                          try {
+                            const brand = await fetchPlaidInstitutionBrand(lmProxyUrl, institution.institutionId)
+                            if (brand) {
+                              updated = {
+                                ...updated,
+                                institutionId: brand.institutionId ?? updated.institutionId,
+                                institutionName: brand.institutionName ?? updated.institutionName,
+                                institutionLogoDataUrl: brand.logoDataUrl ?? updated.institutionLogoDataUrl,
+                                institutionPrimaryColor: brand.primaryColor ?? updated.institutionPrimaryColor,
+                                logoSource: brand.logoDataUrl ? 'plaid' : updated.logoSource,
+                              }
+                            }
+                          } catch {
+                            // Plaid account linking should still succeed if optional brand metadata is unavailable.
+                          }
+                        }
                         setEditing(updated)
                         if (lmProxyUrl) {
                           setAccountSyncStatus(eAcc.id, 'Syncing Plaid holdings...')
@@ -866,6 +1065,17 @@ export default function Accounts() {
       )}
       {navImportAccount && (
         <NavImportModal account={navImportAccount} onClose={() => setNavImportAccount(null)} />
+      )}
+      {logoAccount && (
+        <LogoModal
+          account={logoAccount}
+          onClose={() => setLogoAccount(null)}
+          onSave={patch => {
+            const updated = { ...logoAccount, ...patch }
+            upsertAccount(updated)
+            if (editing?.id === logoAccount.id) setEditing(updated)
+          }}
+        />
       )}
     </div>
   )
