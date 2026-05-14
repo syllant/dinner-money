@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank,
   FileText, User, CreditCard, Clock, Home, Receipt,
   Banknote, Settings, ArrowLeftRight, CircleDollarSign,
-  RefreshCw, Loader2,
+  RefreshCw, Loader2, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
-import { fetchEcbDailyExchangeRates, type EcbDailyRatePoint } from '../../lib/ecb'
-import { syncAllAccounts } from '../../lib/lmSync'
+import { fetchEcbRatesCached, readEcbCache, isEcbMarketDay, ECB_CACHE_KEY, ECB_CACHE_TTL, type EcbDailyRatePoint, type EcbCache } from '../../lib/ecb'
+import { fetchIntradayPrices, fetchIntradayFxRates, type IntradayPricePoint } from '../../lib/tiingo'
+import { fastSyncAccounts, syncAllAccounts } from '../../lib/lmSync'
 import { InfoTooltip } from '../ui/InfoTooltip'
 
 function relativeTime(date: Date): string {
@@ -63,28 +64,29 @@ const configItems: NavItem[] = [
   { to: '/config/tax', label: 'Tax', icon: <FileText size={13} /> },
 ]
 
-function SidebarNavItem({ item }: { item: NavItem }) {
+function SidebarNavItem({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
   const location = useLocation()
   const isActive = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
 
   return (
     <NavLink
       to={item.to}
+      title={collapsed ? item.label : undefined}
       className={clsx(
-        'flex items-center gap-[7px] px-[9px] py-[6px] text-[12.5px] rounded-[5px] mx-[5px] my-[1px] transition-colors',
+        'flex items-center py-[6px] text-[12.5px] rounded-[5px] mx-[5px] my-[1px] transition-colors',
+        collapsed ? 'justify-center px-0' : 'gap-[7px] px-[9px]',
         isActive
           ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white font-medium'
           : 'text-gray-500 dark:text-gray-400 hover:bg-white/70 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-100'
       )}
     >
       <span className="opacity-65 flex-shrink-0">{item.icon}</span>
-      {item.label}
+      {!collapsed && item.label}
     </NavLink>
   )
 }
 
-// Settings link + currency flag toggles in one row
-function SidebarSettingsRow() {
+function SidebarSettingsRow({ collapsed }: { collapsed: boolean }) {
   const location = useLocation()
   const isActive = location.pathname === '/settings' || location.pathname.startsWith('/settings/')
   const { profile, setProfile, setSimulationResult } = useAppStore()
@@ -92,6 +94,23 @@ function SidebarSettingsRow() {
   const setCurrency = (next: 'EUR' | 'USD') => {
     setProfile({ baseCurrency: next })
     setSimulationResult(null)
+  }
+
+  if (collapsed) {
+    return (
+      <NavLink
+        to="/settings"
+        title="Settings"
+        className={clsx(
+          'flex items-center justify-center py-[6px] text-[12.5px] rounded-[5px] mx-[5px] my-[1px] transition-colors',
+          isActive
+            ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white font-medium'
+            : 'text-gray-500 dark:text-gray-400 hover:bg-white/70 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-100'
+        )}
+      >
+        <span className="opacity-65"><Settings size={13} /></span>
+      </NavLink>
+    )
   }
 
   return (
@@ -108,15 +127,14 @@ function SidebarSettingsRow() {
         <span className="opacity-65 flex-shrink-0"><Settings size={13} /></span>
         Settings
       </NavLink>
-      {/* Currency pill toggle */}
-      <div className="group relative flex h-[28px] shrink-0 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 p-[2px] gap-[1px]">
+      <div className="group relative flex h-[30px] shrink-0 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 p-[2px] gap-[1px]">
         {(['EUR', 'USD'] as const).map(next => (
           <button
             key={next}
             type="button"
             onClick={() => setCurrency(next)}
             className={clsx(
-              'h-[22px] w-[24px] flex items-center justify-center rounded-full text-[16px] transition-colors',
+              'h-[24px] w-[28px] flex items-center justify-center rounded-full text-[19px] leading-none transition-colors',
               currency === next
                 ? 'bg-white dark:bg-gray-600 shadow-sm'
                 : 'hover:bg-white/60 dark:hover:bg-gray-700'
@@ -133,22 +151,47 @@ function SidebarSettingsRow() {
   )
 }
 
-// Sync status row with resync button
-function SidebarSync({ onSyncComplete }: { onSyncComplete?: () => void }) {
-  const { lmApiKey, accounts } = useAppStore()
-  const [syncing, setSyncing] = useState(false)
-  const [failed, setFailed] = useState(false)
+const AUTO_FAST_SYNC_TTL = 60 * 60 * 1000 // 1 hour
 
-  const lastSyncedAt = accounts.length > 0 && accounts[0]?.syncedAt
-    ? new Date(accounts[0].syncedAt)
-    : null
+function SidebarSync({ collapsed, onSyncComplete }: { collapsed: boolean; onSyncComplete?: () => void }) {
+  const { lmApiKey, fastSyncedAt, setFastSyncedAt, fullSyncedAt, setFullSyncedAt } = useAppStore()
+  const [fastSyncing, setFastSyncing] = useState(false)
+  const [fullSyncing, setFullSyncing] = useState(false)
+  const [fastFailed, setFastFailed] = useState(false)
+  const [fullFailed, setFullFailed] = useState(false)
 
-  const relTime = useRelativeTime(lastSyncedAt)
+  const lastFastSync = fastSyncedAt ? new Date(fastSyncedAt) : null
+  const lastFullSync = fullSyncedAt ? new Date(fullSyncedAt) : null
+  const fastRelTime = useRelativeTime(lastFastSync)
+  const fullRelTime = useRelativeTime(lastFullSync)
 
-  async function handleSync() {
-    if (!lmApiKey || syncing) return
-    setSyncing(true)
-    setFailed(false)
+  async function handleFastSync() {
+    if (!lmApiKey || fastSyncing || fullSyncing) return
+    setFastSyncing(true)
+    setFastFailed(false)
+    try {
+      const state = useAppStore.getState()
+      const merged = await fastSyncAccounts({
+        lmApiKey: state.lmApiKey!,
+        lmProxyUrl: state.lmProxyUrl,
+        existingAccounts: state.accounts,
+      })
+      useAppStore.getState().setAccounts(merged)
+      setFastSyncedAt(new Date().toISOString())
+      onSyncComplete?.()
+    } catch (err) {
+      console.error('[Sidebar] Fast sync failed:', err)
+      setFastFailed(true)
+      setTimeout(() => setFastFailed(false), 4000)
+    } finally {
+      setFastSyncing(false)
+    }
+  }
+
+  async function handleFullSync() {
+    if (!lmApiKey || fastSyncing || fullSyncing) return
+    setFullSyncing(true)
+    setFullFailed(false)
     try {
       const state = useAppStore.getState()
       const merged = await syncAllAccounts({
@@ -159,73 +202,219 @@ function SidebarSync({ onSyncComplete }: { onSyncComplete?: () => void }) {
         existingAccounts: state.accounts,
       })
       useAppStore.getState().setAccounts(merged)
+      setFullSyncedAt(new Date().toISOString())
+      setFastSyncedAt(new Date().toISOString()) // full sync also refreshes balances
       onSyncComplete?.()
     } catch (err) {
-      console.error('[Sidebar] Sync failed:', err)
-      setFailed(true)
-      setTimeout(() => setFailed(false), 4000)
+      console.error('[Sidebar] Full sync failed:', err)
+      setFullFailed(true)
+      setTimeout(() => setFullFailed(false), 4000)
     } finally {
-      setSyncing(false)
+      setFullSyncing(false)
     }
   }
 
-  const statusText = syncing
-    ? 'Syncing…'
-    : failed
-      ? 'Sync failed'
-      : relTime
-        ? `Last sync: ${relTime}`
-        : 'Not synced'
+  // Auto-refresh on first mount if no fast sync yet or > 1h stale
+  const handleFastSyncRef = useRef(handleFastSync)
+  handleFastSyncRef.current = handleFastSync
+  useEffect(() => {
+    const state = useAppStore.getState()
+    if (!state.lmApiKey || !state.accounts.length) return
+    const last = state.fastSyncedAt
+    if (!last || Date.now() - new Date(last).getTime() > AUTO_FAST_SYNC_TTL) {
+      handleFastSyncRef.current()
+    }
+  }, []) // run once on mount
+
+  const fastStatus = fastSyncing ? 'Syncing…' : fastFailed ? 'Failed' : fastRelTime || 'Never'
+  const fullStatus = fullSyncing ? 'Syncing…' : fullFailed ? 'Failed' : fullRelTime || 'Never'
+  const anySyncing = fastSyncing || fullSyncing
+
+  if (collapsed) {
+    return (
+      <div className="mx-[5px] mb-[3px] flex justify-center">
+        <button
+          type="button"
+          onClick={handleFastSync}
+          disabled={anySyncing || !lmApiKey}
+          title={`Fast sync: ${fastStatus}`}
+          className="h-[24px] w-[24px] flex items-center justify-center rounded text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 transition-colors"
+        >
+          {fastSyncing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+        </button>
+      </div>
+    )
+  }
 
   return (
-    <div className="mx-[10px] mb-[3px] px-[9px] py-[5px] flex items-center justify-between gap-2 rounded-[5px]">
-      <span className={clsx('text-[10px] leading-none', failed ? 'text-red-500 dark:text-red-400' : 'text-gray-400')}>
-        {statusText}
-      </span>
-      <button
-        type="button"
-        onClick={handleSync}
-        disabled={syncing || !lmApiKey}
-        title="Resync all data"
-        className="h-[18px] w-[18px] flex items-center justify-center rounded text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 transition-colors"
-      >
-        {syncing
-          ? <Loader2 size={11} className="animate-spin" />
-          : <RefreshCw size={11} />
-        }
-      </button>
+    <div className="mx-[10px] mb-[6px] rounded-[7px] border border-gray-200/80 dark:border-gray-700/80 bg-white/55 dark:bg-gray-800/45 px-[8px] py-[5px]">
+      <div className="mb-[4px] text-[9px] font-medium uppercase tracking-[0.06em] text-gray-400 dark:text-gray-500">
+        Sync
+      </div>
+      {/* Fast sync row — LM account balances */}
+      <div className="flex items-center justify-between gap-2">
+        <span className={clsx('text-[10px] leading-none min-w-0 truncate',
+          fastFailed ? 'text-red-500 dark:text-red-400' : 'text-gray-400')}>
+          <span className="text-gray-500 dark:text-gray-300">Fast</span> · {fastStatus}
+        </span>
+        <button
+          type="button"
+          onClick={handleFastSync}
+          disabled={anySyncing || !lmApiKey}
+          title="Fast sync: refresh LunchMoney account balances"
+          className="h-[20px] w-[20px] flex-shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40 transition-colors"
+        >
+          {fastSyncing ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+        </button>
+      </div>
+      {/* Full sync row — Plaid holdings + IBKR Flex */}
+      <div className="mt-[3px] flex items-center justify-between gap-2">
+        <span className={clsx('text-[10px] leading-none min-w-0 truncate',
+          fullFailed ? 'text-red-500 dark:text-red-400' : 'text-gray-400')}>
+          <span className="text-gray-500 dark:text-gray-300">Full (positions)</span> · {fullStatus}
+        </span>
+        <button
+          type="button"
+          onClick={handleFullSync}
+          disabled={anySyncing || !lmApiKey}
+          title="Full sync: Plaid holdings + IBKR Flex NAV"
+          className="h-[20px] w-[20px] flex-shrink-0 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40 transition-colors"
+        >
+          {fullSyncing ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+        </button>
+      </div>
     </div>
   )
 }
 
 type SidebarRange = '1d' | '1w' | '1m' | '1y'
-const SIDEBAR_RANGE_DAYS: Record<SidebarRange, number> = { '1d': 3, '1w': 10, '1m': 35, '1y': 400 }
+const SIDEBAR_RANGES: SidebarRange[] = ['1d', '1w', '1m', '1y']
 const SIDEBAR_RANGE_POINTS: Record<SidebarRange, number> = { '1d': 2, '1w': 7, '1m': 30, '1y': 252 }
 
-const ECB_CACHE_KEY = 'dinner-money:ecb-fx-cache'
-const ECB_CACHE_TTL = 60 * 60 * 1000 // 1 hour
-
-interface EcbCache { rows: EcbDailyRatePoint[]; fetchedAt: string }
-
-function makeSparkline(values: number[]): string {
-  if (values.length < 2) return ''
-  const min = Math.min(...values)
-  const max = Math.max(...values)
+// Sparkline helpers support nullable values (null = future/unknown slots).
+// Null points are excluded from the polyline but included in x-axis scaling.
+function makeSparkline(values: Array<number | null>): string {
+  const nonNulls = values.filter((v): v is number => v !== null)
+  if (nonNulls.length < 2) return ''
+  const n = values.length
+  const min = Math.min(...nonNulls)
+  const max = Math.max(...nonNulls)
   const span = Math.max(max - min, 0.0001)
-  return values.map((v, i) => {
-    const x = 4 + i * (144 / (values.length - 1))
-    const y = 24 - ((v - min) / span) * 18
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
+  return values
+    .map((v, i) => {
+      if (v === null) return null
+      const x = 4 + i * (144 / (n - 1))
+      const y = 22 - ((v - min) / span) * 18
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .filter((p): p is string => p !== null)
+    .join(' ')
+}
+
+function sparklinePoint(values: Array<number | null>, idx: number): [number, number] {
+  const n = values.length
+  if (n < 2 || idx < 0 || idx >= n) return [4, 22]
+  const v = values[idx]
+  if (v === null) return [4, 22]
+  const nonNulls = values.filter((val): val is number => val !== null)
+  if (nonNulls.length === 0) return [4, 22]
+  const min = Math.min(...nonNulls)
+  const max = Math.max(...nonNulls)
+  const span = Math.max(max - min, 0.0001)
+  const x = 4 + idx * (144 / (n - 1))
+  const y = 22 - ((v - min) / span) * 18
+  return [x, y]
+}
+
+// Pad intraday points with nulls for remaining market hours so the x-axis
+// spans the full trading day even before market close.
+function padToMarketClose(
+  points: Array<{ date: string; value: number }>,
+): Array<{ date: string; value: number | null }> {
+  if (points.length === 0) return []
+  const last = new Date(points[points.length - 1].date)
+  const month = last.getUTCMonth() // 0-indexed
+  const isDST = month >= 2 && month <= 9 // Mar–Oct (EDT = UTC-4)
+  const closeHourUTC = isDST ? 20 : 21   // 4 PM ET in UTC
+  const nowUTC = new Date().getUTCHours()
+  if (nowUTC >= closeHourUTC) return points.map(p => ({ ...p }))
+  const intervalMs = points.length >= 2
+    ? new Date(points[1].date).getTime() - new Date(points[0].date).getTime()
+    : 3_600_000
+  const result: Array<{ date: string; value: number | null }> = points.map(p => ({ ...p }))
+  let next = new Date(last.getTime() + intervalMs)
+  while (next.getUTCHours() < closeHourUTC) {
+    result.push({ date: next.toISOString().replace('Z', '+00:00'), value: null })
+    next = new Date(next.getTime() + intervalMs)
+  }
+  return result
+}
+
+function fmtAxisDate(dateStr: string): string {
+  if (!dateStr) return ''
+  if (dateStr.includes('T')) {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return ''
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
+  }
+  const d = new Date(`${dateStr}T12:00:00`)
+  if (isNaN(d.getTime())) return dateStr.slice(5) ?? ''
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function RangeToggle({ range, onChange }: { range: SidebarRange; onChange: (r: SidebarRange) => void }) {
+  return (
+    <div className="flex rounded-[4px] overflow-hidden border border-gray-200 dark:border-gray-700">
+      {SIDEBAR_RANGES.map(r => (
+        <button
+          key={r}
+          type="button"
+          onClick={e => { e.stopPropagation(); e.preventDefault(); onChange(r) }}
+          className={clsx(
+            'w-[20px] py-[1.5px] text-[8.5px] font-medium uppercase transition-colors',
+            r === range
+              ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200'
+              : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+          )}
+        >
+          {r}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
   const snapshot = useAppStore(s => s.portfolioSnapshot)
   const profile = useAppStore(s => s.profile)
   const lmProxyUrl = useAppStore(s => s.lmProxyUrl)
+  const tiingoApiKey = useAppStore(s => s.tiingoApiKey)
+  const accounts = useAppStore(s => s.accounts)
+  const setLiveEurUsdRate = useAppStore(s => s.setLiveEurUsdRate)
+
   const [fxRows, setFxRows] = useState<EcbDailyRatePoint[]>([])
   const [syncedAt, setSyncedAt] = useState<Date | null>(null)
-  const [range, setRange] = useState<SidebarRange>('1w')
+  const [portfolioRange, setPortfolioRangeState] = useState<SidebarRange>(
+    () => (localStorage.getItem('dinner-money:sidebar-portfolio-range') as SidebarRange | null) ?? '1w'
+  )
+  const [fxRange, setFxRangeState] = useState<SidebarRange>(
+    () => (localStorage.getItem('dinner-money:sidebar-fx-range') as SidebarRange | null) ?? '1w'
+  )
+  const setPortfolioRange = (r: SidebarRange) => {
+    setPortfolioRangeState(r)
+    localStorage.setItem('dinner-money:sidebar-portfolio-range', r)
+  }
+  const setFxRange = (r: SidebarRange) => {
+    setFxRangeState(r)
+    localStorage.setItem('dinner-money:sidebar-fx-range', r)
+  }
+  const [portfolioHoverIdx, setPortfolioHoverIdx] = useState<number | null>(null)
+  const [fxHoverIdx, setFxHoverIdx] = useState<number | null>(null)
+  const [autoRefreshNonce, setAutoRefreshNonce] = useState(0)
+  const [intradayPoints, setIntradayPoints] = useState<Array<{ date: string; value: number }>>([])
+  const [intradayLoading, setIntradayLoading] = useState(false)
+  const [fxIntradayPoints, setFxIntradayPoints] = useState<Array<{ date: string; value: number }>>([])
+  const [fxIntradayLoading, setFxIntradayLoading] = useState(false)
 
   const fmtCompact = (v: number) => {
     const abs = Math.abs(v)
@@ -235,189 +424,480 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
   }
   const sym = profile.baseCurrency === 'EUR' ? '€' : '$'
 
-  // Portfolio sparkline — slice snapshot points to match range
   const rawPoints = snapshot?.points ?? []
-  const portfolioPoints = useMemo(() => {
-    const maxPts = SIDEBAR_RANGE_POINTS[range]
+  const portfolioPoints = useMemo((): Array<{ date: string; value: number | null }> => {
+    if (portfolioRange === '1d' && intradayPoints.length >= 2) {
+      return padToMarketClose(intradayPoints)
+    }
+    const maxPts = SIDEBAR_RANGE_POINTS[portfolioRange]
     return rawPoints.slice(-maxPts)
-  }, [rawPoints, range])
-  const portfolioSparkline = useMemo(() => makeSparkline(portfolioPoints.map(p => p.value)), [portfolioPoints])
-  const portLastPoint = portfolioSparkline ? (() => { const p = portfolioSparkline.split(' '); return p.length ? p[p.length - 1].split(',') : null })() : null
+  }, [rawPoints, portfolioRange, intradayPoints])
+  const portfolioValues = useMemo(() => portfolioPoints.map(p => p.value), [portfolioPoints])
+  const portfolioSparkline = useMemo(() => makeSparkline(portfolioValues), [portfolioValues])
+  // Index of last data point (non-null), for the dot at the current price
+  const portfolioLastIdx = useMemo(
+    () => portfolioValues.reduce<number>((last, v, i) => v !== null ? i : last, 0),
+    [portfolioValues]
+  )
 
-  const todayPct = snapshot?.todayPct ?? null
-  const todayAmt = snapshot?.todayAmt ?? null
-  const isPortUp = todayPct != null ? todayPct >= 0 : null
+  // Range gain/loss: for 1d use snapshot today values; for other ranges derive from visible points
+  const rangeGainPct = useMemo(() => {
+    if (portfolioRange === '1d') return snapshot?.todayPct ?? null
+    const nonNull = portfolioPoints.filter((p): p is { date: string; value: number } => p.value != null)
+    if (nonNull.length < 2 || nonNull[0].value <= 0) return null
+    return (nonNull[nonNull.length - 1].value - nonNull[0].value) / nonNull[0].value
+  }, [portfolioRange, snapshot?.todayPct, portfolioPoints])
+
+  const rangeGainAmt = useMemo(() => {
+    if (portfolioRange === '1d') return snapshot?.todayAmt ?? null
+    const nonNull = portfolioPoints.filter((p): p is { date: string; value: number } => p.value != null)
+    if (nonNull.length < 2) return null
+    return nonNull[nonNull.length - 1].value - nonNull[0].value
+  }, [portfolioRange, snapshot?.todayAmt, portfolioPoints])
+
+  const isPortUp = rangeGainPct != null ? rangeGainPct >= 0 : null
   const portColor = isPortUp == null ? '#9ca3af' : isPortUp ? '#16a34a' : '#dc2626'
 
-  // FX sparkline — fetch ECB data for the selected range
   useEffect(() => {
     let cancelled = false
-    const forceRefresh = refreshKey > 0
+    const force = refreshKey > 0 || autoRefreshNonce > 0
+    async function load() {
+      try {
+        const { rows, fetchedAt } = await fetchEcbRatesCached(lmProxyUrl, force)
+        if (!cancelled) {
+          setFxRows(rows)
+          setSyncedAt(fetchedAt)
+          if (rows.length > 0) setLiveEurUsdRate(rows[rows.length - 1].value)
+        }
+      } catch {
+        const cached = readEcbCache()
+        if (cached && !cancelled) { setFxRows(cached.rows); setSyncedAt(new Date(cached.fetchedAt)) }
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [lmProxyUrl, refreshKey, autoRefreshNonce])
 
-    if (!forceRefresh) {
+  // Investable holdings (ticker → value in base currency) for 1D intraday weighting
+  const fxRate = fxRows.length > 0 ? fxRows[fxRows.length - 1].value : 1.08
+  const baseCurr = profile.baseCurrency.toLowerCase()
+  const investableHoldings = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const a of accounts) {
+      if (a.type !== 'investment' && a.type !== 'retirement') continue
+      for (const h of a.holdings ?? []) {
+        if (!h.ticker || /^CUR:|^T-Bill/.test(h.ticker) || h.securityType === 'cash') continue
+        const hCurr = h.currency.toLowerCase()
+        const value = hCurr === baseCurr ? h.institutionValue
+          : baseCurr === 'eur' ? h.institutionValue / fxRate
+          : h.institutionValue * fxRate
+        map.set(h.ticker.toUpperCase(), (map.get(h.ticker.toUpperCase()) ?? 0) + value)
+      }
+    }
+    return [...map.entries()].map(([ticker, value]) => ({ ticker, value }))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, baseCurr, Math.round(fxRate * 1000)])
+
+  // Fetch intraday prices when 1d range is selected
+  useEffect(() => {
+    if (portfolioRange !== '1d' || !tiingoApiKey || investableHoldings.length === 0) {
+      setIntradayPoints([])
+      return
+    }
+    let cancelled = false
+    setIntradayLoading(true)
+    const tickers = [...new Set(investableHoldings.map(h => h.ticker)), 'SPY']
+    Promise.allSettled(tickers.map(t => fetchIntradayPrices(tiingoApiKey, t, lmProxyUrl)))
+      .then(results => {
+        if (cancelled) return
+        const imap = new Map<string, IntradayPricePoint[]>()
+        results.forEach((r, i) => {
+          if (r.status === 'fulfilled' && r.value.length > 0) imap.set(tickers[i], r.value)
+        })
+        const spyData = imap.get('SPY') ?? []
+        if (spyData.length < 2) { setIntradayLoading(false); return }
+        const latestDate = spyData[spyData.length - 1].date.slice(0, 10)
+        const todaySpy = spyData.filter(p => p.date.startsWith(latestDate))
+        if (todaySpy.length < 2) { setIntradayLoading(false); return }
+        const baseByTicker = new Map<string, number>()
+        const closeByTicker = new Map<string, Map<string, number>>()
+        for (const [ticker, prices] of imap) {
+          const todayPrices = prices.filter(p => p.date.startsWith(latestDate))
+          if (todayPrices.length === 0) continue
+          baseByTicker.set(ticker, todayPrices[0].close)
+          const m = new Map<string, number>()
+          for (const p of todayPrices) m.set(p.date, p.close)
+          closeByTicker.set(ticker, m)
+        }
+        const baseInvested = snapshot?.invested ?? 0
+        const points = todaySpy.map(spyPoint => {
+          let totalValue = 0, weightedRet = 0
+          for (const { ticker, value } of investableHoldings) {
+            const close = closeByTicker.get(ticker)?.get(spyPoint.date)
+            const base = baseByTicker.get(ticker)
+            if (close == null || base == null || base <= 0) continue
+            weightedRet += (close / base - 1) * value
+            totalValue += value
+          }
+          const portRet = totalValue > 0 ? weightedRet / totalValue : 0
+          return { date: spyPoint.date, value: Math.round(baseInvested * (1 + portRet)) }
+        })
+        if (!cancelled) { setIntradayPoints(points); setIntradayLoading(false) }
+      })
+      .catch(() => { if (!cancelled) setIntradayLoading(false) })
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolioRange, tiingoApiKey, lmProxyUrl, snapshot?.invested, investableHoldings])
+
+  // Background auto-refresh on weekdays when cache is stale
+  useEffect(() => {
+    function maybeRefresh() {
+      if (document.visibilityState !== 'visible') return
+      if (!isEcbMarketDay()) return
       try {
         const cached = JSON.parse(localStorage.getItem(ECB_CACHE_KEY) ?? 'null') as EcbCache | null
-        if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < ECB_CACHE_TTL) {
-          setFxRows(cached.rows)
-          setSyncedAt(new Date(cached.fetchedAt))
-          return
+        if (cached && Date.now() - new Date(cached.fetchedAt).getTime() > ECB_CACHE_TTL) {
+          setAutoRefreshNonce(n => n + 1)
         }
       } catch {}
     }
+    document.addEventListener('visibilitychange', maybeRefresh)
+    const id = setInterval(maybeRefresh, 10 * 60 * 1000)
+    return () => { document.removeEventListener('visibilitychange', maybeRefresh); clearInterval(id) }
+  }, [])
 
-    async function loadFx() {
-      const start = new Date()
-      start.setDate(start.getDate() - SIDEBAR_RANGE_DAYS['1y']) // always fetch 1y to allow all ranges
-      try {
-        const nextRows = await fetchEcbDailyExchangeRates(start.toISOString().slice(0, 10), lmProxyUrl)
-        if (!cancelled) {
-          const now = new Date()
-          setFxRows(nextRows)
-          setSyncedAt(now)
-          try { localStorage.setItem(ECB_CACHE_KEY, JSON.stringify({ rows: nextRows, fetchedAt: now.toISOString() })) } catch {}
-        }
-      } catch {
-        try {
-          const cached = JSON.parse(localStorage.getItem(ECB_CACHE_KEY) ?? 'null') as EcbCache | null
-          if (cached && !cancelled) { setFxRows(cached.rows); setSyncedAt(new Date(cached.fetchedAt)) }
-        } catch {}
-      }
+  // Fetch intraday EUR/USD from Tiingo when 1d range is selected.
+  // IMPORTANT: use the latest date in the data (not new Date()) to filter today's session —
+  // the same approach as the portfolio intraday above. Using new Date() causes timezone
+  // mismatches (Tiingo FX timestamps may not align with local UTC date) and keeps
+  // regressing. Both intraday implementations MUST stay in sync on this pattern.
+  useEffect(() => {
+    if (fxRange !== '1d' || !tiingoApiKey) {
+      setFxIntradayPoints([])
+      return
     }
-    loadFx()
+    let cancelled = false
+    setFxIntradayLoading(true)
+    fetchIntradayFxRates(tiingoApiKey, 'eurusd', lmProxyUrl)
+      .then(pts => {
+        if (cancelled) return
+        if (pts.length === 0) { setFxIntradayPoints([]); return }
+        // Derive the reference date from the latest point in the data — avoids timezone
+        // boundary mismatches with Tiingo's timestamps. Never use new Date() here.
+        const latestDate = pts[pts.length - 1].date.slice(0, 10)
+        // Filter to NYSE market hours so the x-axis matches the portfolio sparkline.
+        // FX trades 24/5 but we only want the regular session window (~9 AM ET onward).
+        // Both this and the portfolio intraday must stay in sync — see padToMarketClose.
+        const isDST = (() => { const m = new Date(latestDate + 'T12:00:00Z').getUTCMonth(); return m >= 2 && m <= 9 })()
+        const openHourUTC = isDST ? 13 : 14  // 9 AM ET in UTC (hourly boundary)
+        const sessionPts = pts
+          .filter(p => p.date.startsWith(latestDate) && new Date(p.date).getUTCHours() >= openHourUTC)
+          .map(p => ({ date: p.date, value: p.close }))
+        setFxIntradayPoints(sessionPts.length >= 2 ? sessionPts : [])
+      })
+      .catch(() => { if (!cancelled) setFxIntradayPoints([]) })
+      .finally(() => { if (!cancelled) setFxIntradayLoading(false) })
     return () => { cancelled = true }
-  }, [lmProxyUrl, refreshKey])
+  }, [fxRange, tiingoApiKey, lmProxyUrl])
 
-  const slicedFx = useMemo(() => fxRows.slice(-SIDEBAR_RANGE_POINTS[range]), [fxRows, range])
-  // Always show the most recent ECB rate regardless of selected range
+  const slicedFx = useMemo((): Array<{ date: string; value: number | null }> => {
+    if (fxRange === '1d' && fxIntradayPoints.length >= 2) {
+      const aligned = portfolioRange === '1d' && intradayPoints.length >= 2
+        ? fxIntradayPoints.filter(p => p.date >= intradayPoints[0].date)
+        : fxIntradayPoints
+      return padToMarketClose(aligned.length >= 2 ? aligned : fxIntradayPoints)
+    }
+    return fxRows.slice(-SIDEBAR_RANGE_POINTS[fxRange])
+  }, [fxRows, fxRange, fxIntradayPoints, portfolioRange, intradayPoints])
+  const fxValues = useMemo(() => slicedFx.map(r => r.value), [slicedFx])
+  const fxSparkline = useMemo(() => makeSparkline(fxValues), [fxValues])
+  const fxLastIdx = useMemo(
+    () => fxValues.reduce<number>((last, v, i) => v !== null ? i : last, 0),
+    [fxValues]
+  )
+
   const fxLatest = fxRows.length > 0 ? fxRows[fxRows.length - 1].value : undefined
   const fxLatestDate = fxRows.length > 0 ? fxRows[fxRows.length - 1].date : undefined
-  const fxFirst = slicedFx.length > 0 ? slicedFx[0].value : undefined
-  // Color is always based on 7d comparison: higher than 7d ago = red (EUR strengthened), lower = green
-  const fx7dAgo = useMemo(() => {
-    if (fxRows.length === 0) return undefined
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7)
-    const cutoffStr = cutoff.toISOString().slice(0, 10)
-    const before = fxRows.filter(r => r.date <= cutoffStr)
-    return before.length > 0 ? before[before.length - 1].value : fxRows[0].value
-  }, [fxRows])
-  const isFxHigherThan7d = fxLatest != null && fx7dAgo != null ? fxLatest > fx7dAgo : null
-  const fxColor = isFxHigherThan7d == null ? '#9ca3af' : isFxHigherThan7d ? '#dc2626' : '#16a34a'
-  const fxSparkline = useMemo(() => makeSparkline(slicedFx.map(r => r.value)), [slicedFx])
-  const fxLastPoint = fxSparkline ? (() => { const p = fxSparkline.split(' '); return p.length ? p[p.length - 1].split(',') : null })() : null
+  const fxSeriesLatest = useMemo(
+    () => [...slicedFx].reverse().find(r => r.value != null),
+    [slicedFx]
+  )
+  const fxDisplayLatest = fxSeriesLatest?.value ?? fxLatest
+
+  const fxRangeFirst = slicedFx.length > 0 ? (slicedFx[0].value ?? undefined) : undefined
+  const fxColor = fxDisplayLatest == null || fxRangeFirst == null ? '#9ca3af'
+    : fxDisplayLatest < fxRangeFirst ? '#16a34a'
+    : '#dc2626'
+
+  const portfolioSvgRef = useRef<SVGSVGElement>(null)
+  const fxSvgRef = useRef<SVGSVGElement>(null)
+
+  function handleSparklineMouseMove(
+    e: React.MouseEvent<SVGSVGElement>,
+    values: Array<number | null>,
+    setIdx: (i: number | null) => void,
+  ) {
+    const count = values.length
+    if (count < 2) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const svgX = ((e.clientX - rect.left) / rect.width) * 152
+    const raw = (svgX - 4) * (count - 1) / 144
+    let idx = Math.max(0, Math.min(count - 1, Math.round(raw)))
+    // Clamp to last non-null index (don't hover over future placeholder slots)
+    if (values[idx] === null) {
+      idx = values.reduce<number>((last, v, i) => v !== null ? i : last, 0)
+    }
+    setIdx(idx)
+  }
+
+  const displayPortfolioValue = portfolioHoverIdx != null
+    ? portfolioPoints[portfolioHoverIdx]?.value
+    : snapshot?.invested
+  const displayPortfolioLabel = portfolioHoverIdx != null
+    ? fmtAxisDate(portfolioPoints[portfolioHoverIdx]?.date ?? '')
+    : 'Portfolio'
+
+  const displayFxValue = fxHoverIdx != null ? slicedFx[fxHoverIdx]?.value : fxDisplayLatest
+  const displayFxLabel = fxHoverIdx != null ? fmtAxisDate(slicedFx[fxHoverIdx]?.date ?? '') : 'EUR/USD'
+
+  const fxTooltipText = `ECB reference rate${syncedAt ? ` · fetched ${syncedAt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}${fxLatestDate ? ` (${fxLatestDate})` : ''}`
 
   return (
     <div className="mx-[10px] mb-2">
-      <div className="rounded-[7px] border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/60 overflow-hidden">
-        {/* Range toggle — top right inside card */}
-        <div className="flex justify-end px-[9px] pt-[6px]">
-          <div className="flex rounded-[4px] overflow-hidden border border-gray-200 dark:border-gray-700">
-            {(['1d', '1w', '1m', '1y'] as SidebarRange[]).map(r => (
-              <button key={r} onClick={() => setRange(r)}
-                className={clsx(
-                  'px-[7px] py-[1.5px] text-[9px] font-medium uppercase tracking-[0.05em] transition-colors',
-                  r === range
-                    ? 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200'
-                    : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-                )}>
-                {r}
-              </button>
-            ))}
+      <div className="rounded-[7px] border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/60">
+
+        {/* ── Portfolio section ── */}
+        <div className="px-[9px] pt-[6px] pb-0">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 mb-[3px]">
+            <div className="flex items-center gap-[4px] min-w-0">
+              <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em] whitespace-nowrap truncate">
+                {displayPortfolioLabel}
+              </div>
+              {intradayLoading && <Loader2 size={8} className="animate-spin text-gray-400 flex-shrink-0" />}
+            </div>
+            <RangeToggle range={portfolioRange} onChange={setPortfolioRange} />
           </div>
         </div>
-
-        {/* Portfolio section */}
-        <Link to="/investments" className="block px-[9px] py-[7px] hover:bg-white dark:hover:bg-gray-800 transition-colors">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em]">Portfolio</div>
-              <div className="text-[15px] font-medium tabular-nums text-gray-900 dark:text-white">
-                {snapshot ? `${sym}${fmtCompact(snapshot.invested)}` : '—'}
-              </div>
-              {todayPct != null && (
-                <div className="text-[10px] tabular-nums whitespace-nowrap" style={{ color: portColor }}>
-                  {todayPct >= 0 ? '+' : ''}{(todayPct * 100).toFixed(2)}%{todayAmt != null && ` (${todayAmt >= 0 ? '+' : '−'}${sym}${fmtCompact(Math.abs(todayAmt))})`}
-                </div>
-              )}
-            </div>
-            {portfolioSparkline && (
-              <svg width="76" height="30" viewBox="0 0 152 30" className="shrink-0 overflow-visible" aria-hidden="true">
-                <polyline points={portfolioSparkline} fill="none" stroke={portColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                {portLastPoint && <circle cx={portLastPoint[0]} cy={portLastPoint[1]} r="4" fill={portColor} />}
-              </svg>
+        <Link to="/investments" className="block px-[9px] pb-[8px] hover:bg-white/80 dark:hover:bg-gray-800/80 rounded-b-none transition-colors">
+          <div className="flex items-baseline gap-[5px] min-w-0 overflow-hidden">
+            <span className="text-[15px] font-medium tabular-nums text-gray-900 dark:text-white shrink-0">
+              {displayPortfolioValue != null
+                ? portfolioHoverIdx != null
+                  ? `${sym}${displayPortfolioValue.toLocaleString()}`
+                  : `${sym}${fmtCompact(displayPortfolioValue)}`
+                : '—'}
+            </span>
+            {rangeGainPct != null && portfolioHoverIdx == null && (
+              <span className="text-[11px] font-medium tabular-nums whitespace-nowrap shrink-0 truncate" style={{ color: portColor }}>
+                {rangeGainPct >= 0 ? '+' : ''}{(rangeGainPct * 100).toFixed(2)}%
+                {rangeGainAmt != null && ` (${rangeGainAmt >= 0 ? '+' : '−'}${sym}${fmtCompact(Math.abs(rangeGainAmt))})`}
+              </span>
             )}
           </div>
+          {portfolioSparkline && (
+            <div className="mt-[5px]">
+              <svg
+                ref={portfolioSvgRef}
+                viewBox="0 0 152 44"
+                preserveAspectRatio="none"
+                className="w-full"
+                style={{ height: 44, display: 'block' }}
+                aria-hidden="true"
+                onMouseMove={e => handleSparklineMouseMove(e, portfolioValues, setPortfolioHoverIdx)}
+                onMouseLeave={() => setPortfolioHoverIdx(null)}
+              >
+                <polyline points={portfolioSparkline} fill="none" stroke={portColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                {portfolioHoverIdx == null && portfolioValues.filter(v => v !== null).length >= 2 && (() => {
+                  const [lx, ly] = sparklinePoint(portfolioValues, portfolioLastIdx)
+                  return <circle cx={lx} cy={ly} r="3.5" fill={portColor} vectorEffect="non-scaling-stroke" />
+                })()}
+                {portfolioHoverIdx != null && (() => {
+                  const [hx, hy] = sparklinePoint(portfolioValues, portfolioHoverIdx)
+                  return <>
+                    <line x1={hx} y1={2} x2={hx} y2={25} stroke="#9ca3af" strokeWidth="0.8" strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
+                    <circle cx={hx} cy={hy} r="3.5" fill={portColor} vectorEffect="non-scaling-stroke" />
+                  </>
+                })()}
+                <line x1="4" y1="26" x2="148" y2="26" stroke="#e5e7eb" strokeWidth="0.7" vectorEffect="non-scaling-stroke" />
+                {portfolioPoints.length > 0 && <>
+                  <text x="4" y="39" textAnchor="start" fontSize="8" fill="#9ca3af">{fmtAxisDate(portfolioPoints[0].date)}</text>
+                  <text x="148" y="39" textAnchor="end" fontSize="8" fill="#9ca3af">{fmtAxisDate(portfolioPoints[portfolioPoints.length - 1].date)}</text>
+                </>}
+              </svg>
+            </div>
+          )}
         </Link>
 
-        {/* FX section */}
+        <div className="mx-[9px] border-t border-gray-100 dark:border-gray-700" />
+
+        {/* ── FX section ── */}
+        <div className="px-[9px] pt-[6px] pb-0">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 mb-[3px]">
+            <div className="flex items-center gap-[4px] min-w-0">
+              <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em] whitespace-nowrap truncate">
+                {displayFxLabel}
+              </div>
+              {fxIntradayLoading && <Loader2 size={8} className="animate-spin text-gray-400 flex-shrink-0" />}
+            </div>
+            <RangeToggle range={fxRange} onChange={setFxRange} />
+          </div>
+        </div>
         <Link
           to="/currencies"
-          aria-label={fxFirst == null ? 'EUR/USD unavailable.' : `EUR/USD. Was ${fxFirst.toFixed(4)} ${range} ago.`}
-          className="block px-[9px] py-[7px] hover:bg-white dark:hover:bg-gray-800 transition-colors"
+          aria-label={fxDisplayLatest == null ? 'EUR/USD unavailable.' : `EUR/USD ${fxDisplayLatest.toFixed(4)}`}
+          className="block px-[9px] pb-[8px] hover:bg-white/80 dark:hover:bg-gray-800/80 transition-colors"
         >
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <div className="text-[9.5px] font-medium text-gray-400 uppercase tracking-[0.06em]">
-                EUR/USD
-              </div>
-              <div className="text-[15px] font-medium tabular-nums text-gray-900 dark:text-white">
-                {fxLatest == null ? '—' : fxLatest.toFixed(4)}
-              </div>
-            </div>
+          <div className="flex items-baseline gap-[6px] min-w-0" onClick={e => e.preventDefault()}>
             <InfoTooltip
-              text={
-                `ECB reference rate${syncedAt ? ` fetched ${syncedAt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}${fxLatestDate ? ` (${fxLatestDate})` : ''}` +
-                (fxFirst != null ? `. Was ${fxFirst.toFixed(4)} ${range} ago` : '')
-              }
+              text={fxTooltipText}
               trigger={
-                <svg width="76" height="30" viewBox="0 0 152 30" className="shrink-0 overflow-visible" aria-hidden="true">
-                  <polyline points={fxSparkline} fill="none" stroke={fxColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                  {fxLastPoint && <circle cx={fxLastPoint[0]} cy={fxLastPoint[1]} r="4" fill={fxColor} />}
-                </svg>
+                <span className="text-[15px] font-medium tabular-nums text-gray-900 dark:text-white shrink-0">
+                  {displayFxValue == null ? '—' : displayFxValue.toFixed(4)}
+                </span>
               }
             />
+            {fxDisplayLatest != null && fxRangeFirst != null && fxHoverIdx == null && (
+              <span className="text-[15px] font-medium tabular-nums whitespace-nowrap" style={{ color: fxColor }}>
+                {(() => {
+                  const pct = (fxDisplayLatest - fxRangeFirst) / fxRangeFirst * 100
+                  return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`
+                })()}
+              </span>
+            )}
           </div>
+          {fxSparkline && (
+            <div className="mt-[5px]">
+              <svg
+                ref={fxSvgRef}
+                viewBox="0 0 152 44"
+                preserveAspectRatio="none"
+                className="w-full"
+                style={{ height: 44, display: 'block' }}
+                aria-hidden="true"
+                onMouseMove={e => handleSparklineMouseMove(e, fxValues, setFxHoverIdx)}
+                onMouseLeave={() => setFxHoverIdx(null)}
+              >
+                <polyline points={fxSparkline} fill="none" stroke={fxColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                {fxHoverIdx == null && fxValues.filter(v => v !== null).length >= 2 && (() => {
+                  const [lx, ly] = sparklinePoint(fxValues, fxLastIdx)
+                  return <circle cx={lx} cy={ly} r="3.5" fill={fxColor} vectorEffect="non-scaling-stroke" />
+                })()}
+                {fxHoverIdx != null && (() => {
+                  const [hx, hy] = sparklinePoint(fxValues, fxHoverIdx)
+                  return <>
+                    <line x1={hx} y1={2} x2={hx} y2={25} stroke="#9ca3af" strokeWidth="0.8" strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />
+                    <circle cx={hx} cy={hy} r="3.5" fill={fxColor} vectorEffect="non-scaling-stroke" />
+                  </>
+                })()}
+                <line x1="4" y1="26" x2="148" y2="26" stroke="#e5e7eb" strokeWidth="0.7" vectorEffect="non-scaling-stroke" />
+                {slicedFx.length > 0 && <>
+                  <text x="4" y="39" textAnchor="start" fontSize="8" fill="#9ca3af">{fmtAxisDate(slicedFx[0].date)}</text>
+                  <text x="148" y="39" textAnchor="end" fontSize="8" fill="#9ca3af">{fmtAxisDate(slicedFx[slicedFx.length - 1].date)}</text>
+                </>}
+              </svg>
+            </div>
+          )}
         </Link>
       </div>
     </div>
   )
 }
 
+function AppLogo({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0">
+      <rect width="32" height="32" rx="7" fill="#1e1b4b" />
+      {/* Fork: 2 tines + bridge + handle */}
+      <line x1="9" y1="6" x2="9" y2="13" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" />
+      <line x1="13" y1="6" x2="13" y2="13" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" />
+      <path d="M9 13 Q11 16.5 13 13" stroke="#fbbf24" strokeWidth="2" fill="none" strokeLinecap="round" />
+      <line x1="11" y1="16.5" x2="11" y2="26" stroke="#fbbf24" strokeWidth="2" strokeLinecap="round" />
+      {/* Ascending trend line */}
+      <polyline points="19,25 23,18 28,11" stroke="#fbbf24" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="28" cy="11" r="2.2" fill="#fbbf24" />
+    </svg>
+  )
+}
+
 export function Sidebar() {
   const [fxRefreshKey, setFxRefreshKey] = useState(0)
+  const [collapsed, setCollapsed] = useState(() =>
+    localStorage.getItem('dinner-money:sidebar-collapsed') === 'true'
+  )
+
+  useEffect(() => {
+    localStorage.setItem('dinner-money:sidebar-collapsed', String(collapsed))
+  }, [collapsed])
 
   return (
-    <div className="w-[196px] min-w-[196px] border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex flex-col overflow-y-auto">
-      {/* Logo */}
-      <Link
-        to="/"
-        className="px-[14px] py-[13px] pb-[10px] border-b border-gray-200 dark:border-gray-700 block hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-      >
-        <div className="text-[15px] font-medium text-gray-900 dark:text-white">DinnerMoney</div>
-        <div className="text-[10px] text-gray-400 mt-[1px]">Retirement planner</div>
-      </Link>
+    <div className={clsx(
+      'border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex flex-col overflow-y-auto transition-[width,min-width] duration-200',
+      collapsed ? 'w-[48px] min-w-[48px]' : 'w-[196px] min-w-[196px]'
+    )}>
+      {/* Logo row */}
+      <div className="border-b border-gray-200 dark:border-gray-700 flex items-center px-[10px] py-[11px] gap-[6px]">
+        {collapsed ? (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            title="Expand sidebar"
+            className="flex items-center justify-center w-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          >
+            <ChevronRight size={15} />
+          </button>
+        ) : (
+          <>
+            <Link to="/" className="flex items-center gap-[8px] hover:opacity-80 transition-opacity min-w-0 flex-1">
+              <AppLogo size={22} />
+              <div className="text-[15px] font-medium text-gray-900 dark:text-white truncate">DinnerMoney</div>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              title="Collapse sidebar"
+              className="h-[22px] w-[22px] flex items-center justify-center rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex-shrink-0"
+            >
+              <ChevronLeft size={14} />
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Insights nav */}
-      <div className="px-[10px] pt-[10px] pb-[3px] text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
-        Insights
-      </div>
+      {!collapsed && (
+        <div className="px-[10px] pt-[10px] pb-[3px] text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
+          Insights
+        </div>
+      )}
+      {collapsed && <div className="h-[6px]" />}
       {insightItems.map((item) => (
-        <SidebarNavItem key={item.to} item={item} />
+        <SidebarNavItem key={item.to} item={item} collapsed={collapsed} />
       ))}
 
       {/* Config nav */}
-      <div className="px-[10px] pt-[10px] pb-[3px] text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
-        Configuration
-      </div>
+      {!collapsed && (
+        <div className="px-[10px] pt-[10px] pb-[3px] text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
+          Configuration
+        </div>
+      )}
+      {collapsed && <div className="h-[4px]" />}
       {configItems.map((item) => (
-        <SidebarNavItem key={item.to} item={item} />
+        <SidebarNavItem key={item.to} item={item} collapsed={collapsed} />
       ))}
 
       <div className="flex-1" />
 
-      <SidebarPortfolioFx refreshKey={fxRefreshKey} />
-      <SidebarSync onSyncComplete={() => setFxRefreshKey(k => k + 1)} />
-      <SidebarSettingsRow />
-      <div className="h-[8px]" />
+      {/* Portfolio / FX panel — hidden when collapsed */}
+      {!collapsed && (
+        <SidebarPortfolioFx refreshKey={fxRefreshKey} />
+      )}
+
+      {/* Sync status — above Settings row */}
+      <SidebarSync collapsed={collapsed} onSyncComplete={() => setFxRefreshKey(k => k + 1)} />
+
+      {/* Settings row with currency toggle */}
+      <SidebarSettingsRow collapsed={collapsed} />
+
     </div>
   )
 }

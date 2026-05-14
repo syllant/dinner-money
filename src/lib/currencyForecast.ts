@@ -42,12 +42,12 @@ interface CachedForecastResult {
   result: ForecastResult
 }
 
-const CACHE_PREFIX = 'dinner-money:currency-forecast:v3:'
+const CACHE_PREFIX = 'dinner-money:currency-forecast:v4:'
 const TRADING_ECONOMICS_URL = 'https://tradingeconomics.com/forecast/currency'
 const ECB_SPF_URLS = [
-  ['3M', 'https://data-api.ecb.europa.eu/service/data/SPF/Q.U2.ASSU.USD.P3M.Q.?format=csvdata', 3],
-  ['6M', 'https://data-api.ecb.europa.eu/service/data/SPF/Q.U2.ASSU.USD.P6M.Q.?format=csvdata', 6],
-  ['12M', 'https://data-api.ecb.europa.eu/service/data/SPF/Q.U2.ASSU.USD.P12M.Q.?format=csvdata', 12],
+  ['3M', 'https://data-api.ecb.europa.eu/service/data/SPF/Q.U2.ASSU.USD.P3M.Q.?format=csvdata&lastNObservations=8', 3],
+  ['6M', 'https://data-api.ecb.europa.eu/service/data/SPF/Q.U2.ASSU.USD.P6M.Q.?format=csvdata&lastNObservations=8', 6],
+  ['12M', 'https://data-api.ecb.europa.eu/service/data/SPF/Q.U2.ASSU.USD.P12M.Q.?format=csvdata&lastNObservations=8', 12],
 ] as const
 const CME_QUARTER_MONTH_CODES = ['H', 'M', 'U', 'Z'] as const
 const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2'
@@ -86,7 +86,7 @@ async function cachedFetch(key: string, ttlMs: number, loader: () => Promise<For
   const cached = readCache(key, ttlMs)
   if (cached) return cached
   const result = await loader()
-  writeCache(key, result)
+  if (result.points.length > 0) writeCache(key, result)
   return result
 }
 
@@ -117,6 +117,15 @@ function horizonDateFromHeader(header: string, now: Date) {
   const monthMatch = clean.match(/(\d+)\s*M/)
   if (monthMatch) return isoDate(addMonths(now, Number(monthMatch[1])))
   return isoDate(now)
+}
+
+function dateFromQuarterPeriod(period: string): string | null {
+  const match = period.trim().toUpperCase().match(/^(\d{4})-Q([1-4])$/)
+  if (!match) return null
+  const year = Number(match[1])
+  const quarter = Number(match[2])
+  const month = quarter * 3
+  return `${year}-${String(month).padStart(2, '0')}-${month === 6 || month === 9 ? '30' : '31'}`
 }
 
 function parseNumber(text: string) {
@@ -211,26 +220,36 @@ export function parseEcbSpfCsv(csv: string, monthsAhead: number, fetchedAt: stri
   const headers = rows[0].map(header => header.trim())
   const timeIndex = headers.indexOf('TIME_PERIOD')
   const valueIndex = headers.indexOf('OBS_VALUE')
+  const sourceIndex = headers.indexOf('FCT_SOURCE')
   if (timeIndex < 0 || valueIndex < 0) return null
 
-  let latest = ''
   const byPeriod = new Map<string, number[]>()
+  const avgByPeriod = new Map<string, number>()
   for (const row of rows.slice(1)) {
     const period = row[timeIndex]?.trim() ?? ''
     const value = parseNumber(row[valueIndex] ?? '')
     if (!period || value == null) continue
-    if (period > latest) latest = period
-    byPeriod.set(period, [...(byPeriod.get(period) ?? []), value])
+    const source = sourceIndex >= 0 ? (row[sourceIndex]?.trim().toUpperCase() ?? '') : ''
+    if (source === 'AVG') {
+      avgByPeriod.set(period, value)
+    } else if (source !== 'NUM' && source !== 'VAR') {
+      byPeriod.set(period, [...(byPeriod.get(period) ?? []), value])
+    }
   }
+  const periods = [...new Set([...byPeriod.keys(), ...avgByPeriod.keys()])]
+    .filter(period => (byPeriod.get(period)?.length ?? 0) > 0 || avgByPeriod.has(period))
+    .sort()
+  const latest = periods[periods.length - 1] ?? ''
   const values = latest ? byPeriod.get(latest) ?? [] : []
-  if (values.length === 0) return null
+  const avgValue = latest ? avgByPeriod.get(latest) : undefined
+  if (values.length === 0 && avgValue == null) return null
   const median = quantile(values, 0.5)
-  const avg = mean(values)
+  const avg = mean(values) ?? avgValue
   return {
     source: 'ecb_spf',
     sourceLabel: 'ECB SPF',
     kind: 'survey_forecast',
-    date: isoDate(addMonths(now, monthsAhead)),
+    date: dateFromQuarterPeriod(latest) ?? isoDate(addMonths(now, monthsAhead)),
     value: median ?? avg,
     low: values.length >= 5 ? quantile(values, 0.1) : undefined,
     high: values.length >= 5 ? quantile(values, 0.9) : undefined,
@@ -422,11 +441,11 @@ export async function fetchPredictionMarkets(options: FetcherOptions = {}): Prom
 }
 
 export async function getCombinedEurUsdForecast(options: FetcherOptions = {}): Promise<ForecastResult> {
-  const results = [
-    await fetchTradingEconomicsForecast(options),
-    await fetchEcbSpfForecast(options),
-    await fetchEuroFxFutures(options),
-  ]
+  const results = await Promise.all([
+    fetchTradingEconomicsForecast(options),
+    fetchEcbSpfForecast(options),
+    fetchEuroFxFutures(options),
+  ])
   if (options.includePredictionMarkets) {
     results.push(await fetchPredictionMarkets(options))
   }

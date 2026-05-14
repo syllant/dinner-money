@@ -66,3 +66,53 @@ export async function fetchEcbDailyExchangeRates(
   if (!res.ok) throw new Error(`ECB EXR returned ${res.status}`)
   return parseEcbDailyExchangeRatesCsv(await res.text())
 }
+
+// Shared localStorage cache for ECB rates (used by Sidebar and Currencies page)
+export const ECB_CACHE_KEY = 'dinner-money:ecb-fx-cache'
+export const ECB_CACHE_TTL = 60 * 60 * 1000 // 1 hour
+
+export interface EcbCache { rows: EcbDailyRatePoint[]; fetchedAt: string }
+
+export function readEcbCache(): EcbCache | null {
+  try {
+    const raw = localStorage.getItem(ECB_CACHE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as EcbCache
+  } catch { return null }
+}
+
+export function writeEcbCache(rows: EcbDailyRatePoint[]) {
+  try {
+    localStorage.setItem(ECB_CACHE_KEY, JSON.stringify({ rows, fetchedAt: new Date().toISOString() }))
+  } catch {}
+}
+
+// Returns true if it's a weekday (ECB publishes Mon–Fri)
+export function isEcbMarketDay(): boolean {
+  const day = new Date().getDay()
+  return day >= 1 && day <= 5
+}
+
+// Fetch 1Y+ of ECB data, read/write the shared cache
+export async function fetchEcbRatesCached(
+  proxyUrl: string | null | undefined,
+  forceRefresh = false,
+): Promise<{ rows: EcbDailyRatePoint[]; fetchedAt: Date; fromCache: boolean }> {
+  if (!forceRefresh) {
+    const cached = readEcbCache()
+    if (cached) {
+      const age = Date.now() - new Date(cached.fetchedAt).getTime()
+      const sameDay = new Date(cached.fetchedAt).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
+      // Use cache if fetched today AND within TTL
+      if (sameDay && age < ECB_CACHE_TTL) {
+        return { rows: cached.rows, fetchedAt: new Date(cached.fetchedAt), fromCache: true }
+      }
+    }
+  }
+  const start = new Date()
+  start.setFullYear(start.getFullYear() - 1)
+  start.setDate(start.getDate() - 35) // 1y + 35d buffer
+  const rows = await fetchEcbDailyExchangeRates(start.toISOString().slice(0, 10), proxyUrl)
+  writeEcbCache(rows)
+  return { rows, fetchedAt: new Date(), fromCache: false }
+}

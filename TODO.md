@@ -11,4 +11,6 @@ This is a personal backlog, not intended for automated implementation from AI ag
    * currently used as a fallback when name-based heuristics are insufficient
    * better fix: use Tiingo metadata (country of exchange) or a user-editable ticker→category map
 * Tax page is hardcoded to California (FTB) for the state column — generalize if app is used outside CA
+* Demo mode with fake data
+* Overview page
 * Consolidate LunchMoney features

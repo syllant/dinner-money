@@ -79,16 +79,18 @@ export function DriveSync() {
 
   async function silentConnect(): Promise<void> {
     try {
-      const token = await acquireToken('')
-      setUserEmail(localStorage.getItem(LS_USER_EMAIL) ?? '')
       const key = await getCachedKey()
       if (key) {
+        setUserEmail(localStorage.getItem(LS_USER_EMAIL) ?? '')
         setPhase('ready')
-      } else {
-        pendingBlobRef.current = await driveDownload(token)
-        setIsNewBackup(pendingBlobRef.current === null)
-        setPhase('needs-passphrase')
+        return
       }
+      // No cached key — must fetch the encrypted blob from Drive, which needs a token
+      const token = await acquireToken('')
+      setUserEmail(localStorage.getItem(LS_USER_EMAIL) ?? '')
+      pendingBlobRef.current = await driveDownload(token)
+      setIsNewBackup(pendingBlobRef.current === null)
+      setPhase('needs-passphrase')
     } catch {
       setPhase('disconnected')
     }

@@ -19,8 +19,11 @@ export async function syncPlaidInvestmentAccount(account: Account, proxyUrl: str
   } catch {
     // Holdings are still useful even if the brokerage does not expose transactions.
   }
+  // Use Plaid's reported value as balance — more current than LunchMoney's cached value.
+  const balance = annotatedHoldings.reduce((sum, h) => sum + h.institutionValue, 0)
   return {
     ...account,
+    balance: balance > 0 ? balance : account.balance,
     holdings: annotatedHoldings,
     taxLots: derivePlaidTaxLots(annotatedHoldings),
     allocation,

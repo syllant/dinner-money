@@ -1,25 +1,24 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { Loader2, RefreshCw } from 'lucide-react'
 import { ResponsiveContainer, Treemap, LineChart, AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip as RCTooltip, ReferenceLine } from 'recharts'
-import { RefreshCw } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
+import { syncAllAccounts } from '../lib/lmSync'
 import { PageHeader } from '../components/ui/PageHeader'
 import { MetricCard } from '../components/ui/MetricCard'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
 import { Card } from '../components/ui/Card'
 import { formatCompact, formatCurrency } from '../lib/format'
-import { convertToBase, DEFAULT_EUR_USD_RATE } from '../lib/currency'
+import { convertToBase } from '../lib/currency'
 import { projectedAnnualDividendsEUR } from '../lib/dividends'
 import { projectedAccountsBy } from '../lib/accountLifecycle'
-import { fetchTickerDividends, projectDividends, fetchMonthlyAdjustedReturns, fetchRecentDailyReturns, TiingoRateLimitError } from '../lib/tiingo'
-import type { MonthlyTickerReturn, DailyTickerReturn } from '../lib/tiingo'
-import { syncIbkrFlexAccounts } from '../lib/ibkrFlex'
-import { syncPlaidInvestmentAccount } from '../lib/investmentSync'
+import { fetchTickerDividends, projectDividends, fetchMonthlyAdjustedReturns, fetchRecentDailyReturns, fetchIntradayPrices } from '../lib/tiingo'
+import type { MonthlyTickerReturn, DailyTickerReturn, IntradayPricePoint } from '../lib/tiingo'
 import type { Currency, Account } from '../types'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
-type HistRangeKey = '1d' | '1w' | '1M' | '3M' | '1Y' | '2Y' | '3Y' | '5Y' | 'All'
-const HIST_RANGES: HistRangeKey[] = ['1d', '1w', '1M', '3M', '1Y', '2Y', '3Y', '5Y', 'All']
+type HistRangeKey = '1D' | '1W' | '1M' | '3M' | '1Y' | '2Y' | '3Y' | '5Y' | 'All'
+const HIST_RANGES: HistRangeKey[] = ['1D', '1W', '1M', '3M', '1Y', '2Y', '3Y', '5Y', 'All']
 
 type TreemapView = 'positions' | 'allocation' | 'currency' | 'gains'
 
@@ -139,9 +138,9 @@ function weightedPortfolioReturn(
   return weightedSum / totalValue
 }
 
-function fmtReturn(r: number | null): string {
+function fmtReturn(r: number | null, decimals = 1): string {
   if (r == null) return '—'
-  return `${r >= 0 ? '+' : ''}${(r * 100).toFixed(1)}%`
+  return `${r >= 0 ? '+' : ''}${(r * 100).toFixed(decimals)}%`
 }
 
 function returnClass(r: number | null): string {
@@ -150,6 +149,11 @@ function returnClass(r: number | null): string {
 }
 
 function fmtChartDate(dateStr: string): string {
+  // Intraday ISO timestamp: "2025-05-12T13:30:00+00:00"
+  if (dateStr.includes('T')) {
+    const d = new Date(dateStr)
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true })
+  }
   if (dateStr.length === 7) {
     const [year, mo] = dateStr.split('-')
     const abbr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -162,9 +166,33 @@ function fmtChartDate(dateStr: string): string {
 function histStartMonthFor(range: HistRangeKey, today: Date): string {
   if (range === 'All') return '2000-01'
   const d = new Date(today)
-  const mo: Record<HistRangeKey, number> = { '1d': 0, '1w': 0, '1M': 0, '3M': 3, '1Y': 12, '2Y': 24, '3Y': 36, '5Y': 60, 'All': 0 }
+  const mo: Record<HistRangeKey, number> = { '1D': 0, '1W': 0, '1M': 0, '3M': 3, '1Y': 12, '2Y': 24, '3Y': 36, '5Y': 60, 'All': 0 }
   d.setMonth(d.getMonth() - mo[range])
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+// Pad intraday data with null-value rows up to market close (4 PM ET) so the
+// x-axis spans the full trading day even before close.
+function padIntradayToMarketClose<T extends { date: string }>(
+  rows: T[],
+  makeNullRow: (date: string) => T,
+): T[] {
+  if (rows.length === 0) return rows
+  const last = new Date(rows[rows.length - 1].date)
+  const month = last.getUTCMonth()
+  const isDST = month >= 2 && month <= 9
+  const closeHourUTC = isDST ? 20 : 21
+  if (new Date().getUTCHours() >= closeHourUTC) return rows
+  const intervalMs = rows.length >= 2
+    ? new Date(rows[1].date).getTime() - new Date(rows[0].date).getTime()
+    : 3_600_000
+  const result = [...rows]
+  let next = new Date(last.getTime() + intervalMs)
+  while (next.getUTCHours() < closeHourUTC) {
+    result.push(makeNullRow(next.toISOString().replace('Z', '+00:00')))
+    next = new Date(next.getTime() + intervalMs)
+  }
+  return result
 }
 
 function gainColor(gainPct: number | null): string {
@@ -286,13 +314,12 @@ function AccountFilter({
 export default function Investments() {
   const {
     accounts, profile, tiingoApiKey, lmProxyUrl,
-    ibkrFlexToken, ibkrFlexQueryId,
     dividendHistory, dividendSyncedAt,
     setTickerDividends, setDividendSyncedAt,
-    setAccounts, upsertAccount,
     expenses, medicalCoverages, medicalExpenses,
     pensions, realEstateEvents, transfers, windfalls,
-    setPortfolioSnapshot,
+    setPortfolioSnapshot, liveEurUsdRate,
+    fullSyncedAt, setFullSyncedAt, setFastSyncedAt,
   } = useAppStore()
 
   const [treemapView, setTreemapView] = useState<TreemapView>('positions')
@@ -302,13 +329,17 @@ export default function Investments() {
   const goBack = () => setDrilldownStack(s => s.slice(0, -1))
 
   const [divSyncing, setDivSyncing] = useState(false)
-  const [portfolioSyncing, setPortfolioSyncing] = useState(false)
-  const [portfolioSyncMsg, setPortfolioSyncMsg] = useState<string | null>(null)
+  const [fullSyncing, setFullSyncing] = useState(false)
+  const [fullSyncFailed, setFullSyncFailed] = useState(false)
   const [showTableView, setShowTableView] = useState(false)
   const [dailyReturnsMap, setDailyReturnsMap] = useState<Map<string, DailyTickerReturn[]>>(new Map())
-  const [historyRange, setHistoryRange] = useState<HistRangeKey>(() =>
-    (localStorage.getItem('dinner-money:perf-range') as HistRangeKey | null) ?? '2Y'
-  )
+  const [intradayMap, setIntradayMap] = useState<Map<string, IntradayPricePoint[]>>(new Map())
+  const [historyRange, setHistoryRange] = useState<HistRangeKey>(() => {
+    const stored = localStorage.getItem('dinner-money:perf-range')
+    // Migrate old lowercase values to uppercase
+    const migrated = stored === '1d' ? '1D' : stored === '1w' ? '1W' : stored
+    return (migrated as HistRangeKey | null) ?? '2Y'
+  })
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number> | null>(() => {
     const raw = localStorage.getItem('dinner-money:perf-accounts')
     if (!raw || raw === 'all') return null
@@ -330,7 +361,6 @@ export default function Investments() {
   } | null>(null)
   const [treemapPos, setTreemapPos] = useState({ x: 0, y: 0 })
   const [perfReturnsMap, setPerfReturnsMap] = useState<Map<string, MonthlyTickerReturn[]>>(new Map())
-  const [tiingoRateLimited, setTiingoRateLimited] = useState(false)
 
   // ── Included accounts ──
 
@@ -347,9 +377,9 @@ export default function Investments() {
 
   const getAccountBaseValue = (a: typeof accounts[0]) => {
     if (a.holdings && a.holdings.length > 0) {
-      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate), 0)
     }
-    return convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    return convertToBase(a.balance, a.currency, profile.baseCurrency, liveEurUsdRate)
   }
 
   const invested = includedAccounts
@@ -373,12 +403,12 @@ export default function Investments() {
     if (a.holdings && a.holdings.length > 0) {
       let accLt = 0, accSt = 0
       for (const h of a.holdings) {
-        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         let gainBase: number | null = null
         let isShortTerm: boolean | null = null
 
         if (h.costBasis != null && h.costBasis > 0) {
-          const costBase = convertToBase(h.costBasis, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const costBase = convertToBase(h.costBasis, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
           const gain = valBase - costBase
           gainBase = gain
           totalCostBase += costBase
@@ -397,14 +427,14 @@ export default function Investments() {
         }
 
         if (!a.ibkrAccountId && h.ticker === 'CUR:USD' && a.fxSplitEUR && a.fxSplitEUR > 0) {
-          const eurInUSD = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
+          const eurInUSD = a.fxSplitEUR * liveEurUsdRate
           const remainUSD = Math.max(0, h.institutionValue - eurInUSD)
-          const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, liveEurUsdRate)
           const existEUR = allHoldings.find(x => x.ticker === 'CUR:EUR')
           if (existEUR) { existEUR.value += eurBase; existEUR.nativeValue += a.fxSplitEUR }
           else allHoldings.push({ ticker: 'CUR:EUR', name: 'EUR Cash', value: eurBase, gains: null, isShortTerm: null, quantity: 0, isPseudo: false, nativeCurrency: 'EUR', nativeValue: a.fxSplitEUR, nativeGains: null, category: 'EUR' })
           if (remainUSD > 0) {
-            const remBase = convertToBase(remainUSD, 'USD', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+            const remBase = convertToBase(remainUSD, 'USD', profile.baseCurrency, liveEurUsdRate)
             const existUSD = allHoldings.find(x => x.ticker === 'CUR:USD')
             if (existUSD) { existUSD.value += remBase; existUSD.nativeValue += remainUSD }
             else allHoldings.push({ ticker: 'CUR:USD', name: 'USD Cash', value: remBase, gains: null, isShortTerm: null, quantity: 0, isPseudo: false, nativeCurrency: 'USD', nativeValue: remainUSD, nativeGains: null, category: 'USD' })
@@ -440,7 +470,7 @@ export default function Investments() {
 
   for (const a of includedAccounts.filter(a => a.type === 'investment' || a.type === 'retirement')) {
     if (!a.holdings || a.holdings.length === 0) {
-      const val = convertToBase(a.balance, a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+      const val = convertToBase(a.balance, a.currency, profile.baseCurrency, liveEurUsdRate)
       if (val !== 0) {
         allHoldings.push({ ticker: '', name: a.name, value: val, gains: null, isShortTerm: null, quantity: 0, isPseudo: true, nativeCurrency: a.currency.toUpperCase(), nativeValue: Math.abs(a.balance), nativeGains: null, category: 'Other' })
       }
@@ -474,14 +504,14 @@ export default function Investments() {
   for (const a of includedAccounts.filter(a => a.type === 'investment' || a.type === 'retirement')) {
     const baseVal = getAccountBaseValue(a)
     if (a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
-      const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
-      const eurInAcc = convertToBase(a.fxSplitEUR, 'EUR', a.currency as 'EUR' | 'USD', DEFAULT_EUR_USD_RATE)
+      const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, liveEurUsdRate)
+      const eurInAcc = convertToBase(a.fxSplitEUR, 'EUR', a.currency as 'EUR' | 'USD', liveEurUsdRate)
       addCurrencyPosition('EUR', a.name, eurBase)
-      addCurrencyPosition(a.currency.toUpperCase(), a.name, convertToBase(Math.max(0, a.balance - eurInAcc), a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE))
+      addCurrencyPosition(a.currency.toUpperCase(), a.name, convertToBase(Math.max(0, a.balance - eurInAcc), a.currency, profile.baseCurrency, liveEurUsdRate))
     } else if (a.holdings && a.holdings.length > 0) {
       for (const h of a.holdings) {
         const c = h.ticker?.match(/^CUR:([A-Z]{3})$/)?.[1] ?? h.currency.toUpperCase()
-        addCurrencyPosition(c, a.name, convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE))
+        addCurrencyPosition(c, a.name, convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate))
       }
     } else {
       addCurrencyPosition(a.currency.toUpperCase(), a.name, baseVal)
@@ -509,21 +539,21 @@ export default function Investments() {
         const cat = empowerCategory(h.securityType, h.ticker, h.name)
         const posLabel = h.ticker || (tBill ? h.name : h.name.slice(0, 20))
         if (!a.ibkrAccountId && h.ticker === 'CUR:USD' && a.fxSplitEUR && a.fxSplitEUR > 0) {
-          const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, liveEurUsdRate)
           addToCategory('EUR', eurBase, `${a.name} (EUR)`)
-          const eurAsUSD = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
-          const remainBase = convertToBase(Math.max(0, h.institutionValue - eurAsUSD), h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const eurAsUSD = a.fxSplitEUR * liveEurUsdRate
+          const remainBase = convertToBase(Math.max(0, h.institutionValue - eurAsUSD), h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
           if (remainBase > 0) addToCategory('USD', remainBase, posLabel)
         } else {
-          const val = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const val = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
           addToCategory(cat, val, posLabel)
         }
       }
     } else if (!a.ibkrAccountId && a.fxSplitEUR && a.fxSplitEUR > 0 && a.currency.toUpperCase() !== 'EUR') {
-      const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+      const eurBase = convertToBase(a.fxSplitEUR, 'EUR', profile.baseCurrency, liveEurUsdRate)
       addToCategory('EUR', eurBase, `${a.name} (EUR)`)
-      const eurInAccCurrency = a.fxSplitEUR * DEFAULT_EUR_USD_RATE
-      const remainB = convertToBase(Math.max(0, a.balance - eurInAccCurrency), a.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+      const eurInAccCurrency = a.fxSplitEUR * liveEurUsdRate
+      const remainB = convertToBase(Math.max(0, a.balance - eurInAccCurrency), a.currency, profile.baseCurrency, liveEurUsdRate)
       if (a.allocation.equity > 0) addToCategory('US Stocks', remainB * a.allocation.equity / 100, `${a.name} (equity)`)
       if (a.allocation.bonds > 0) addToCategory('US Bonds', remainB * a.allocation.bonds / 100, `${a.name} (bonds)`)
       if (a.allocation.cash > 0) addToCategory('USD', remainB * a.allocation.cash / 100, `${a.name} (cash)`)
@@ -559,7 +589,7 @@ export default function Investments() {
         .filter(d => d.paymentDate >= todayStr && d.paymentDate <= next12End)
       if (projected.length === 0) continue
       const annualBase = projected.reduce((s, d) =>
-        s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+        s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, liveEurUsdRate), 0)
       const existing = divByTicker.find(x => x.ticker === h.ticker)
       if (existing) existing.annualBase += annualBase
       else divByTicker.push({ ticker: h.ticker, annualBase })
@@ -579,7 +609,7 @@ export default function Investments() {
         .filter(d => d.paymentDate >= todayStr && d.paymentDate <= next12End)
       if (projected.length === 0) continue
       const annualBase = projected.reduce((s, d) =>
-        s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+        s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, liveEurUsdRate), 0)
       const items = divByAccount.get(a.name) ?? []
       const existing = items.find(x => x.ticker === h.ticker)
       if (existing) existing.annualBase += annualBase
@@ -590,7 +620,7 @@ export default function Investments() {
 
   const annualDivBase = divByTicker.length > 0
     ? divByTicker.reduce((s, d) => s + d.annualBase, 0)
-    : convertToBase(projectedAnnualDividendsEUR(includedAccounts, DEFAULT_EUR_USD_RATE), 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    : convertToBase(projectedAnnualDividendsEUR(includedAccounts, liveEurUsdRate), 'EUR', profile.baseCurrency, liveEurUsdRate)
 
   // Number of accounts contributing to dividends
   const divAccountCount = divAccountIds.size || includedAccounts.filter(a => (a.holdings?.length ?? 0) > 0).length
@@ -613,7 +643,7 @@ export default function Investments() {
               .filter(d => d.paymentDate >= todayStr && d.paymentDate <= next12End)
             if (projected.length > 0) {
               const annualBase = projected.reduce((s, d) =>
-                s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+                s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, liveEurUsdRate), 0)
               const existing = interestByTicker.find(x => x.ticker === h.ticker)
               if (existing) existing.annualBase += annualBase
               else interestByTicker.push({ ticker: h.ticker, annualBase })
@@ -624,7 +654,7 @@ export default function Investments() {
       }
       // T-bills: estimated 4.5% yield
       if (isTreasuryBill(h.ticker, h.securityType, h.name)) {
-        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         if (valBase > 0) {
           const label = h.ticker || h.name.slice(0, 14) || 'T-Bill'
           const existing = interestByTicker.find(x => x.ticker === label)
@@ -637,7 +667,7 @@ export default function Investments() {
       if (h.ticker?.startsWith('CUR:')) {
         const cur = h.ticker.slice(4)
         const rate = cur === 'EUR' ? 0.025 : 0.040
-        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         if (valBase > 0) {
           const label = `${cur} Cash`
           const existing = interestByTicker.find(x => x.ticker === label)
@@ -666,7 +696,7 @@ export default function Investments() {
               .filter(d => d.paymentDate >= todayStr && d.paymentDate <= next12End)
             if (projected.length > 0) {
               const annualBase = projected.reduce((s, d) =>
-                s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+                s + convertToBase(d.totalAmount, h.currency as Currency, profile.baseCurrency, liveEurUsdRate), 0)
               accItems.push({ ticker: h.ticker, annualBase })
             }
           }
@@ -674,14 +704,14 @@ export default function Investments() {
       }
       // T-bills
       if (isTreasuryBill(h.ticker, h.securityType, h.name)) {
-        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         if (valBase > 0) accItems.push({ ticker: h.ticker || h.name.slice(0, 14) || 'T-Bill', annualBase: valBase * 0.045 })
       }
       // Cash
       if (h.ticker?.startsWith('CUR:')) {
         const cur = h.ticker.slice(4)
         const rate = cur === 'EUR' ? 0.025 : 0.040
-        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const valBase = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         if (valBase > 0) accItems.push({ ticker: `${cur} Cash`, annualBase: valBase * rate })
       }
       if (accItems.length > 0) {
@@ -741,7 +771,7 @@ export default function Investments() {
       const holdings: Array<{ticker: string, value: number, startMonth?: string}> = []
       for (const h of a.holdings) {
         if (!h.ticker || /^CUR:/.test(h.ticker) || isTreasuryBill(h.ticker, h.securityType, h.name)) continue
-        const val = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const val = convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         const startMonth = tickerStartMonth.get(h.ticker.toUpperCase())
         const existing = holdings.find(x => x.ticker === h.ticker)
         if (existing) existing.value += val
@@ -801,7 +831,7 @@ export default function Investments() {
   }, [dailyReturnsMap, perfHoldings])
 
   const historyStartMonth = useMemo(() => histStartMonthFor(historyRange, today), [historyRange]) // eslint-disable-line react-hooks/exhaustive-deps
-  const isDaily = historyRange === '1d' || historyRange === '1w' || historyRange === '1M'
+  const isDaily = historyRange === '1D' || historyRange === '1W' || historyRange === '1M'
 
   // For $ normalization: use the total value of selected accounts (not just investable tickers)
   // so that accounts with non-Tiingo holdings (e.g. Fundrise) anchor at their true balance.
@@ -812,7 +842,7 @@ export default function Investments() {
       if (a.type !== 'investment' && a.type !== 'retirement') continue
       if (!selectedAccountIds.has(a.id)) continue
       for (const h of a.holdings ?? []) {
-        total += convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        total += convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate)
       }
     }
     return total
@@ -827,15 +857,11 @@ export default function Investments() {
     if (!tiingoApiKey) return
     const tickers = ['SPY', ...investableTickers]
     let cancelled = false
-    setTiingoRateLimited(false)
     Promise.all(
       tickers.map(t =>
         fetchMonthlyAdjustedReturns(tiingoApiKey, t, perfStartDate, lmProxyUrl)
           .then(data => ({ ticker: t.toUpperCase(), data }))
-          .catch((err: unknown) => {
-            if (err instanceof TiingoRateLimitError) setTiingoRateLimited(true)
-            return { ticker: t.toUpperCase(), data: [] as MonthlyTickerReturn[] }
-          })
+          .catch(() => ({ ticker: t.toUpperCase(), data: [] as MonthlyTickerReturn[] }))
       )
     ).then(results => {
       if (cancelled) return
@@ -854,16 +880,33 @@ export default function Investments() {
       tickers.map(t =>
         fetchRecentDailyReturns(tiingoApiKey, t, 35, lmProxyUrl)
           .then(data => ({ ticker: t.toUpperCase(), data }))
-          .catch((err: unknown) => {
-            if (err instanceof TiingoRateLimitError) setTiingoRateLimited(true)
-            return { ticker: t.toUpperCase(), data: [] as DailyTickerReturn[] }
-          })
+          .catch(() => ({ ticker: t.toUpperCase(), data: [] as DailyTickerReturn[] }))
       )
     ).then(results => {
       if (cancelled) return
       const map = new Map<string, DailyTickerReturn[]>()
       results.forEach(({ ticker, data }) => map.set(ticker, data))
       setDailyReturnsMap(map)
+    })
+    return () => { cancelled = true }
+  }, [tiingoApiKey, lmProxyUrl, perfTickersKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Intraday prices (for 1D chart + today's snapshot point) ──
+  useEffect(() => {
+    if (!tiingoApiKey) return
+    const tickers = ['SPY', ...investableTickers]
+    let cancelled = false
+    Promise.all(
+      tickers.map(t =>
+        fetchIntradayPrices(tiingoApiKey, t, lmProxyUrl)
+          .then(data => ({ ticker: t.toUpperCase(), data }))
+          .catch(() => ({ ticker: t.toUpperCase(), data: [] as IntradayPricePoint[] }))
+      )
+    ).then(results => {
+      if (cancelled) return
+      const map = new Map<string, IntradayPricePoint[]>()
+      results.forEach(({ ticker, data }) => map.set(ticker, data))
+      setIntradayMap(map)
     })
     return () => { cancelled = true }
   }, [tiingoApiKey, lmProxyUrl, perfTickersKey]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -907,6 +950,38 @@ export default function Investments() {
       portfolioCum *= (1 + (totalValue > 0 ? weightedReturn / totalValue : 0))
       raw.push({ date, portfolioCum })
     }
+    if (raw.length < 2) return
+
+    // ── Extend with today's point using intraday prices ──
+    const today = new Date().toISOString().slice(0, 10)
+    const lastDate = raw[raw.length - 1]?.date
+    if (lastDate && lastDate < today && intradayMap.size > 0) {
+      const prevCloseByTicker = new Map<string, number>()
+      const latestByTicker = new Map<string, number>()
+      for (const [ticker, prices] of intradayMap) {
+        const prev = prices.filter(p => p.date.startsWith(lastDate))
+        if (prev.length > 0) prevCloseByTicker.set(ticker, prev[prev.length - 1].close)
+        const tod = prices.filter(p => p.date.startsWith(today))
+        if (tod.length > 0) latestByTicker.set(ticker, tod[tod.length - 1].close)
+      }
+      if (latestByTicker.size > 0) {
+        let totalValue = 0, weightedRet = 0
+        for (const { ticker, value, startMonth } of holdings) {
+          if (startMonth && today.slice(0, 7) < startMonth) continue
+          const tu = ticker.toUpperCase()
+          const prevClose = prevCloseByTicker.get(tu)
+          const latest = latestByTicker.get(tu)
+          if (prevClose == null || latest == null || prevClose <= 0) continue
+          weightedRet += (latest / prevClose - 1) * value
+          totalValue += value
+        }
+        if (totalValue > 0) {
+          portfolioCum *= (1 + weightedRet / totalValue)
+          raw.push({ date: today, portfolioCum })
+        }
+      }
+    }
+
     const finalCum = raw[raw.length - 1]?.portfolioCum ?? 1
     const startVal = finalCum > 0 ? inv / finalCum : inv
     setPortfolioSnapshot({
@@ -915,9 +990,36 @@ export default function Investments() {
       todayAmt: td.pct != null ? td.pct * inv : null,
       points: raw.map(p => ({ date: p.date, value: Math.round(startVal * p.portfolioCum) })),
     })
-  }, [dailyReturnsMap, setPortfolioSnapshot]) // stable deps — values read via refs
+  }, [dailyReturnsMap, intradayMap, setPortfolioSnapshot]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Tiingo dividend sync ──
+  // ── Full positions sync (LM + Plaid + IBKR) ──
+
+  async function handleFullSync() {
+    if (fullSyncing) return
+    setFullSyncing(true)
+    setFullSyncFailed(false)
+    try {
+      const state = useAppStore.getState()
+      const merged = await syncAllAccounts({
+        lmApiKey: state.lmApiKey!,
+        lmProxyUrl: state.lmProxyUrl,
+        ibkrFlexToken: state.ibkrFlexToken,
+        ibkrFlexQueryId: state.ibkrFlexQueryId,
+        existingAccounts: state.accounts,
+      })
+      useAppStore.getState().setAccounts(merged)
+      setFullSyncedAt(new Date().toISOString())
+      setFastSyncedAt(new Date().toISOString())
+    } catch (err) {
+      console.error('[Investments] Full sync failed:', err)
+      setFullSyncFailed(true)
+      setTimeout(() => setFullSyncFailed(false), 4000)
+    } finally {
+      setFullSyncing(false)
+    }
+  }
+
+  // ── Tiingo dividend sync — auto-triggered daily when stale ──
 
   async function syncDividendHistory() {
     if (!tiingoApiKey || investableTickers.length === 0) return
@@ -933,32 +1035,14 @@ export default function Investments() {
     setDivSyncing(false)
   }
 
-  // ── Portfolio sync ──
-
-  async function syncPortfolioAccounts() {
-    if (portfolioSyncing || !lmProxyUrl) return
-    setPortfolioSyncing(true)
-    setPortfolioSyncMsg('Syncing positions…')
-    try {
-      if (ibkrFlexToken && ibkrFlexQueryId) {
-        const synced = await syncIbkrFlexAccounts(accounts, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId)
-        setAccounts(synced)
-      }
-      for (const a of portfolioAccounts.filter(acc => acc.plaidAccessToken && !acc.ibkrAccountId)) {
-        upsertAccount(await syncPlaidInvestmentAccount(a, lmProxyUrl))
-      }
-      if (tiingoApiKey && investableTickers.length > 0) {
-        setPortfolioSyncMsg('Syncing dividends…')
-        await syncDividendHistory()
-      }
-      setPortfolioSyncMsg(null)
-    } catch (err: any) {
-      setPortfolioSyncMsg(`Sync error: ${err?.message ?? 'unknown'}`)
-      setTimeout(() => setPortfolioSyncMsg(null), 4000)
-    } finally {
-      setPortfolioSyncing(false)
-    }
-  }
+  // Auto-sync dividends on page load if stale (>24h) or never synced
+  const syncDividendHistoryRef = useRef(syncDividendHistory)
+  syncDividendHistoryRef.current = syncDividendHistory
+  useEffect(() => {
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000
+    if (dividendSyncedAt && new Date(dividendSyncedAt).getTime() > dayAgo) return
+    syncDividendHistoryRef.current()
+  }, [dividendSyncedAt]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Treemap data builders ──
 
@@ -995,7 +1079,7 @@ export default function Investments() {
           .filter(p => p.value > 0)
           .sort((a, b) => b.value - a.value).slice(0, 12),
         nativeCurrency: showUSD ? 'USD' : profile.baseCurrency,
-        nativeValue: showUSD ? val * DEFAULT_EUR_USD_RATE : val,
+        nativeValue: showUSD ? val * liveEurUsdRate : val,
         nativeGains: null,
       }
     })
@@ -1046,8 +1130,8 @@ export default function Investments() {
         .filter(lot => lot.ticker === drilldown.ticker)
         .map((lot, i) => {
           const gain = lot.costBasis != null ? lot.marketValue - lot.costBasis : null
-          const gainBase = gain != null ? convertToBase(gain, lot.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE) : null
-          const valBase = convertToBase(lot.marketValue, lot.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+          const gainBase = gain != null ? convertToBase(gain, lot.currency as Currency, profile.baseCurrency, liveEurUsdRate) : null
+          const valBase = convertToBase(lot.marketValue, lot.currency as Currency, profile.baseCurrency, liveEurUsdRate)
           const isLT = lot.acquiredDate
             ? (today.getTime() - new Date(lot.acquiredDate).getTime()) / 86400000 >= 365
             : null
@@ -1211,8 +1295,8 @@ export default function Investments() {
     type DataPoint = { date: string; portfolio: number; spy: number | null; portfolioValue: number; spyValue: number | null }
 
     // ── Priority 1: actual IBKR NAV history ($ chart only — % from NAV includes deposits, distorting returns) ──
-    if (chartMode !== '%' && selectedNavHistory && selectedNavHistory.length >= 2) {
-      const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : historyRange === '1M' ? 33 : null
+    if (chartMode !== '%' && historyRange !== '1D' && selectedNavHistory && selectedNavHistory.length >= 2) {
+      const cutoffDays = historyRange === '1W' ? 8 : historyRange === '1M' ? 33 : null
       const fromDate = cutoffDays != null
         ? (() => { const d = new Date(today); d.setDate(d.getDate() - cutoffDays); return d.toISOString().slice(0, 10) })()
         : historyStartMonth
@@ -1238,9 +1322,70 @@ export default function Investments() {
       }
     }
 
-    // ── Priority 2: time-weighted equity + flat base for cash/T-Bills/non-Tiingo ──
+    // ── Priority 2 (1D only): intraday hourly data from Tiingo IEX ──
+    if (historyRange === '1D' && intradayMap.size > 0) {
+      const spyIntraday = intradayMap.get('SPY') ?? []
+      if (spyIntraday.length >= 2) {
+        // Find the most recent trading day that has ≥ 2 hourly points
+        const datesSeen = [...new Set(spyIntraday.map(p => p.date.slice(0, 10)))].sort()
+        const latestDate = [...datesSeen].reverse().find(d =>
+          spyIntraday.filter(p => p.date.startsWith(d)).length >= 2
+        )
+        const todaySpy = latestDate ? spyIntraday.filter(p => p.date.startsWith(latestDate)) : []
+        if (latestDate && todaySpy.length >= 2) {
+          const spyBase = todaySpy[0].close
+          // Build per-ticker base prices and hourly close maps for today
+          const byTicker = new Map<string, Map<string, number>>()
+          const baseByTicker = new Map<string, number>()
+          for (const [ticker, prices] of intradayMap) {
+            const todayPrices = prices.filter(p => p.date.startsWith(latestDate))
+            if (todayPrices.length === 0) continue
+            baseByTicker.set(ticker, todayPrices[0].close)
+            const m = new Map<string, number>()
+            for (const p of todayPrices) m.set(p.date, p.close)
+            byTicker.set(ticker, m)
+          }
+          // Check whether any holding has intraday data — if none, fall through to P3
+          const matchedHoldingsValue = filteredPerfHoldings.reduce((sum, h) =>
+            byTicker.has(h.ticker.toUpperCase()) ? sum + h.value : sum, 0)
+          if (matchedHoldingsValue === 0) {
+            // No portfolio holdings have IEX data — fall through to daily P3
+          } else {
+            const basePortfolioValue = filteredAccountsInvested
+            const p2rows = todaySpy.map(spyPoint => {
+              const spyRet = (spyPoint.close / spyBase - 1) * 100
+              let totalValue = 0, weightedRet = 0
+              for (const { ticker, value, startMonth } of filteredPerfHoldings) {
+                if (startMonth && latestDate.slice(0, 7) < startMonth) continue
+                const tu = ticker.toUpperCase()
+                const close = byTicker.get(tu)?.get(spyPoint.date)
+                const base = baseByTicker.get(tu)
+                if (close == null || base == null || base <= 0) continue
+                weightedRet += (close / base - 1) * value
+                totalValue += value
+              }
+              const portRet = totalValue > 0 ? (weightedRet / totalValue) * 100 : 0
+              return {
+                date: spyPoint.date,
+                portfolio: parseFloat(portRet.toFixed(3)),
+                spy: parseFloat(spyRet.toFixed(3)),
+                portfolioValue: Math.round(basePortfolioValue * (1 + portRet / 100)),
+                spyValue: null,
+              } as DataPoint
+            })
+            return padIntradayToMarketClose(p2rows, date => ({
+              date, portfolio: null as unknown as number, spy: null,
+              portfolioValue: null as unknown as number, spyValue: null,
+            }))
+          }
+        }
+      }
+      // Fall through to daily data if intraday not usable
+    }
+
+    // ── Priority 3: time-weighted equity + flat base for cash/T-Bills/non-Tiingo ──
     if (isDaily) {
-      const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : 33
+      const cutoffDays = historyRange === '1D' ? 2 : historyRange === '1W' ? 8 : 33
       const cutoff = new Date(today)
       cutoff.setDate(cutoff.getDate() - cutoffDays)
       const cutoffStr = cutoff.toISOString().slice(0, 10)
@@ -1314,8 +1459,16 @@ export default function Investments() {
     }
     const finalCum = raw[raw.length - 1]?.portfolioCum ?? 1
     const equityStartVal = finalCum > 0 && trackedEquityValue > 0 ? trackedEquityValue / finalCum : 0
-    return raw.map(p => ({ ...p, portfolioValue: Math.round(flatBase + equityStartVal * p.portfolioCum), spyValue: null })) as DataPoint[]
-  }, [selectedNavHistory, filteredPerfHoldings, filteredAccountsInvested, perfReturnsMap, dailyReturnsMap, historyStartMonth, currentMonth, isDaily, historyRange, chartMode]) // eslint-disable-line react-hooks/exhaustive-deps
+    const result = raw.map(p => ({ ...p, portfolioValue: Math.round(flatBase + equityStartVal * p.portfolioCum), spyValue: null })) as DataPoint[]
+    if (isDaily) {
+      return padIntradayToMarketClose(result, date => ({
+        date, portfolio: null as unknown as number, spy: null,
+        portfolioValue: null as unknown as number, spyValue: null,
+        portfolioCum: 0, spyCum: 0,
+      }))
+    }
+    return result
+  }, [selectedNavHistory, filteredPerfHoldings, filteredAccountsInvested, perfReturnsMap, dailyReturnsMap, intradayMap, historyStartMonth, currentMonth, isDaily, historyRange, chartMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Whether any selected account has real NAV history (determines $ chart mode)
   const hasStackedNavHistory = useMemo(() =>
@@ -1335,7 +1488,7 @@ export default function Investments() {
     const ibkrAccs = selected.filter(a => a.navHistory && a.navHistory.length >= 2)
     const flatAccs = selected.filter(a => !a.navHistory || a.navHistory.length < 2)
 
-    const cutoffDays = historyRange === '1d' ? 2 : historyRange === '1w' ? 8 : historyRange === '1M' ? 33 : null
+    const cutoffDays = historyRange === '1D' ? 2 : historyRange === '1W' ? 8 : historyRange === '1M' ? 33 : null
     const fromDate = cutoffDays != null
       ? (() => { const d = new Date(today); d.setDate(d.getDate() - cutoffDays); return d.toISOString().slice(0, 10) })()
       : historyStartMonth
@@ -1346,7 +1499,7 @@ export default function Investments() {
       const series = a.navHistory!
         .map(p => ({
           date: p.date,
-          value: convertToBase(p.value, a.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE),
+          value: convertToBase(p.value, a.currency as Currency, profile.baseCurrency, liveEurUsdRate),
         }))
         .sort((x, y) => x.date.localeCompare(y.date))
       ibkrNavSeries.set(a.id, series)
@@ -1401,10 +1554,73 @@ export default function Investments() {
     })
   }, [selectedAccountIds, portfolioAccounts, historyRange, historyStartMonth, isDaily, dailyReturnsMap, perfReturnsMap, profile.baseCurrency]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const mostRecentSyncedAt = useMemo(() => {
-    const dates = portfolioAccounts.map(a => a.syncedAt).filter(Boolean).sort()
-    return dates.length ? dates[dates.length - 1] : null
-  }, [portfolioAccounts])
+  // ── Per-account 1D intraday data (one % series per account) ──
+  const perAccountIntradayData = useMemo((): {
+    data: Array<Record<string, string | number | null> & { date: string; spy: number | null }>
+    accountIds: number[]
+  } | null => {
+    if (historyRange !== '1D' || intradayMap.size === 0) return null
+    const spyIntraday = intradayMap.get('SPY') ?? []
+    if (spyIntraday.length < 2) return null
+    const datesSeen = [...new Set(spyIntraday.map(p => p.date.slice(0, 10)))].sort()
+    const latestDate = [...datesSeen].reverse().find(d =>
+      spyIntraday.filter(p => p.date.startsWith(d)).length >= 2
+    )
+    if (!latestDate) return null
+    const todaySpy = spyIntraday.filter(p => p.date.startsWith(latestDate))
+    if (todaySpy.length < 2) return null
+    const spyBase = todaySpy[0].close
+    const byTicker = new Map<string, Map<string, number>>()
+    const baseByTicker = new Map<string, number>()
+    for (const [ticker, prices] of intradayMap) {
+      const todayPrices = prices.filter(p => p.date.startsWith(latestDate))
+      if (todayPrices.length === 0) continue
+      baseByTicker.set(ticker, todayPrices[0].close)
+      const m = new Map<string, number>()
+      for (const p of todayPrices) m.set(p.date, p.close)
+      byTicker.set(ticker, m)
+    }
+    const selectedIds = selectedAccountIds !== null
+      ? [...selectedAccountIds]
+      : portfolioAccounts.map(a => a.id)
+    const accountBaseValue = new Map(
+      portfolioAccounts.map(a => [a.id, getAccountBaseValue(a)])
+    )
+    const accountIds = selectedIds.filter(id => {
+      if (chartMode === '$') return (accountBaseValue.get(id) ?? 0) > 0
+      return (perAccountPerfHoldings.get(id) ?? []).some(h => byTicker.has(h.ticker.toUpperCase()))
+    })
+    if (chartMode === '%' && accountIds.length < 2) return null
+    if (chartMode === '$' && accountIds.length === 0) return null
+    const rows = todaySpy.map(spyPoint => {
+      const row: Record<string, string | number | null> & { date: string; spy: number | null } = {
+        date: spyPoint.date,
+        spy: parseFloat(((spyPoint.close / spyBase - 1) * 100).toFixed(3)),
+      }
+      for (const accId of accountIds) {
+        const holdings = perAccountPerfHoldings.get(accId) ?? []
+        let totalValue = 0, weightedRet = 0
+        for (const { ticker, value, startMonth } of holdings) {
+          if (startMonth && latestDate.slice(0, 7) < startMonth) continue
+          const tu = ticker.toUpperCase()
+          const close = byTicker.get(tu)?.get(spyPoint.date)
+          const base = baseByTicker.get(tu)
+          if (close == null || base == null || base <= 0) continue
+          weightedRet += (close / base - 1) * value
+          totalValue += value
+        }
+        row[`acc_${accId}`] = totalValue > 0 ? parseFloat(((weightedRet / totalValue) * 100).toFixed(3)) : null
+        row[`acc_${accId}_usd`] = Math.round((accountBaseValue.get(accId) ?? 0) + weightedRet)
+      }
+      return row
+    })
+    const padded = padIntradayToMarketClose(rows, date => {
+      const nullRow: Record<string, string | number | null> & { date: string; spy: number | null } = { date, spy: null }
+      for (const id of accountIds) { nullRow[`acc_${id}`] = null; nullRow[`acc_${id}_usd`] = null }
+      return nullRow
+    })
+    return { data: padded, accountIds }
+  }, [historyRange, intradayMap, selectedAccountIds, portfolioAccounts, perAccountPerfHoldings, chartMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Portfolio events from broker data ──
   const portfolioEventsByDate = useMemo(() => {
@@ -1428,12 +1644,12 @@ export default function Investments() {
       for (const d of a.dividends ?? []) {
         if (!d.date) continue
         const dateKey = isDaily ? d.date : d.date.slice(0, 7)
-        const amtBase = convertToBase(d.amount, d.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const amtBase = convertToBase(d.amount, d.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         if (amtBase < 5) continue
         add(dateKey, { emoji: '$', color: '#22c55e', label: `${d.securityName || d.ticker || 'Div'}: +${formatCompact(amtBase, profile.baseCurrency)}` })
       }
       for (const ev of a.investmentEvents ?? []) {
-        const amtBase = convertToBase(ev.amount, ev.currency as Currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+        const amtBase = convertToBase(ev.amount, ev.currency as Currency, profile.baseCurrency, liveEurUsdRate)
         if (amtBase < MIN_AMOUNT_BASE) continue
         const dateKey = isDaily ? ev.date : ev.date.slice(0, 7)
         const meta = EVENT_META[ev.type]
@@ -1517,10 +1733,6 @@ export default function Investments() {
   )
 
   // usdTooltip: reserved for USD exposure detail — wire up to InfoTooltip when the risk panel is built
-
-  const syncLabel = mostRecentSyncedAt
-    ? `Last synced ${new Date(mostRecentSyncedAt).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-    : 'Never synced'
 
   // ── Table views ──
 
@@ -1615,16 +1827,8 @@ export default function Investments() {
 
       <div className="p-4 space-y-4">
 
-        {tiingoRateLimited && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-[12px]">
-            <span>⚠</span>
-            <span>Tiingo rate limit reached — performance data may be incomplete. Wait a few minutes and refresh.</span>
-            <button onClick={() => setTiingoRateLimited(false)} className="ml-auto text-amber-500 hover:text-amber-700 dark:hover:text-amber-200 leading-none">✕</button>
-          </div>
-        )}
-
         {/* ── Metric cards ── */}
-        <div className="grid grid-cols-6 gap-[9px]">
+        <div className="grid grid-cols-9 gap-[9px]">
           <MetricCard
             label="Total invested"
             value={formatCurrency(invested, profile.baseCurrency)}
@@ -1633,33 +1837,33 @@ export default function Investments() {
           />
 
           {/* Returns card: 4 columns with vertical labels */}
-          <div className="col-span-3 bg-gray-50 dark:bg-gray-800 rounded-lg px-[13px] py-[11px]">
+          <div className="col-span-5 bg-gray-50 dark:bg-gray-800 rounded-lg px-[16px] py-[12px]">
             <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-[6px] flex items-center gap-0.5">
               Returns
               <InfoTooltip text="Today: most recent trading day. YTD/12m: time-weighted using current holdings. All: unrealized gain vs cost basis. Excludes cash and T-bills." />
             </div>
             <div className="flex">
               {([
-                { label: 'Today', pct: todayData.pct, spy: todayData.spy, amt: todayData.pct != null ? todayData.pct * invested : null, noData: !tiingoApiKey },
-                { label: 'YTD',   pct: portfolioYtd,  spy: spyYtd,       amt: portfolioYtd != null ? portfolioYtd * invested : null,  noData: !tiingoApiKey },
-                { label: '12m',   pct: portfolio12m,  spy: spy12m,       amt: portfolio12m != null ? portfolio12m * invested : null,  noData: !tiingoApiKey },
-                { label: 'All',   pct: totalReturnPct, spy: spyAll,       amt: totalNetGains !== 0 ? totalNetGains : null,            noData: false },
-              ] as Array<{ label: string; pct: number | null; spy: number | null; amt: number | null; noData: boolean }>).map((item, i) => (
-                <div key={item.label} className="flex-1 flex items-stretch min-w-0">
+                { label: 'Today', pct: todayData.pct, spy: todayData.spy, amt: todayData.pct != null ? todayData.pct * invested : null, noData: !tiingoApiKey, decimals: 2 },
+                { label: 'YTD',   pct: portfolioYtd,  spy: spyYtd,       amt: portfolioYtd != null ? portfolioYtd * invested : null,  noData: !tiingoApiKey, decimals: 1 },
+                { label: '12m',   pct: portfolio12m,  spy: spy12m,       amt: portfolio12m != null ? portfolio12m * invested : null,  noData: !tiingoApiKey, decimals: 1 },
+                { label: 'All',   pct: totalReturnPct, spy: spyAll,       amt: totalNetGains !== 0 ? totalNetGains : null,            noData: false,         decimals: 1 },
+              ] as Array<{ label: string; pct: number | null; spy: number | null; amt: number | null; noData: boolean; decimals: number }>).map((item, i) => (
+                <div key={item.label} className={`flex-1 flex items-stretch min-w-0 rounded-md py-[5px] ${item.label === 'Today' ? 'bg-gray-200 dark:bg-gray-700' : ''}`}>
                   {i > 0 && <div className="w-px self-stretch bg-gray-200 dark:bg-gray-700 mx-3 shrink-0" />}
-                  <div className="flex items-center pr-[5px] shrink-0">
+                  <div className="flex items-center pr-[5px] shrink-0 pl-[5px]">
                     <span
-                      className="text-[8.5px] font-medium text-gray-400 uppercase tracking-wider select-none"
+                      className={`text-[8.5px] font-medium uppercase tracking-wider select-none ${item.label === 'Today' ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400'}`}
                       style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
                     >
                       {item.label}
                     </span>
                   </div>
-                  <div className="flex flex-col justify-center min-w-0">
+                  <div className="flex flex-col justify-center min-w-0 pr-[7px]">
                     <div className="flex items-start justify-between gap-1 leading-none">
                       <div className="flex flex-col">
                         <span className={`text-[20px] font-medium tabular-nums leading-none ${item.pct != null ? returnClass(item.pct) : 'text-gray-300 dark:text-gray-600'}`}>
-                          {item.pct != null ? fmtReturn(item.pct) : item.noData ? '–' : '—'}
+                          {item.pct != null ? fmtReturn(item.pct, item.decimals) : item.noData ? '–' : '—'}
                         </span>
                         {item.amt != null && (
                           <span className={`text-[11px] mt-[1px] whitespace-nowrap tabular-nums ${item.amt >= 0 ? 'text-green-600' : 'text-red-500'}`}>
@@ -1668,9 +1872,11 @@ export default function Investments() {
                         )}
                       </div>
                       {item.spy != null && (
-                        <div className="flex flex-col items-end text-[9px] text-gray-400 dark:text-gray-500 leading-[1.3] shrink-0 pt-[2px]">
-                          <span>SPY</span>
-                          <span>{fmtReturn(item.spy)}</span>
+                        <div className="flex flex-col items-end shrink-0 pt-[2px]">
+                          <div className="flex flex-col items-center px-[5px] py-[3px] rounded border border-gray-300 dark:border-gray-500 gap-[2px]">
+                            <span className="text-[7.5px] font-bold text-gray-400 dark:text-gray-400 uppercase leading-none">SPY</span>
+                            <span className="text-[9px] text-gray-500 dark:text-gray-400 tabular-nums leading-none">{fmtReturn(item.spy, item.decimals)}</span>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1694,6 +1900,36 @@ export default function Investments() {
             valueClass="text-green-600"
             sub={interestSub}
           />
+
+          {/* Position sync — compact, aligned to the lower-right edge */}
+          <div className="flex items-end justify-end px-[2px] py-[7px]">
+            <div className="flex items-end justify-end gap-1.5 min-w-0">
+              <div className="flex flex-col items-end gap-[3px] min-w-0">
+                <span className="text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">Last Positions sync:</span>
+                <div className="flex items-center justify-end gap-1.5">
+                  <span className={`text-[10.5px] font-medium tabular-nums leading-none whitespace-nowrap ${fullSyncFailed ? 'text-red-500' : 'text-gray-500 dark:text-gray-400'}`}>
+                    {fullSyncing ? 'Syncing…' : fullSyncFailed ? 'Failed' : fullSyncedAt
+                      ? (() => {
+                          const diff = Date.now() - new Date(fullSyncedAt).getTime()
+                          if (diff < 60000) return 'just now'
+                          if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
+                          if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
+                          return `${Math.floor(diff / 86400000)}d ago`
+                        })()
+                      : 'Never'}
+                  </span>
+                  <button
+                    onClick={handleFullSync}
+                    disabled={fullSyncing}
+                    className="h-[20px] w-[20px] shrink-0 flex items-center justify-center rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors disabled:opacity-40"
+                    title="Sync positions (Plaid + IBKR)"
+                  >
+                    {fullSyncing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* ── Performance chart ── */}
@@ -1712,23 +1948,25 @@ export default function Investments() {
                 ))}
               </div>
             </div>
-            <AccountFilter
-              accounts={[...portfolioAccounts].sort((a, b) => a.name.localeCompare(b.name))}
-              selectedIds={selectedAccountIds}
-              onChange={setSelectedAccountIds}
-            />
-            <div className="flex items-center gap-1">
-              {HIST_RANGES.map(r => (
-                <button key={r} onClick={() => setHistoryRange(r)}
-                  className={`text-[10.5px] px-2.5 py-[3px] rounded transition-colors ${
-                    historyRange === r
-                      ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
-                      : 'border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-                  }`}>{r}</button>
-              ))}
+            <div className="flex items-center gap-2">
+              <AccountFilter
+                accounts={[...portfolioAccounts].sort((a, b) => a.name.localeCompare(b.name))}
+                selectedIds={selectedAccountIds}
+                onChange={setSelectedAccountIds}
+              />
+              <div className="flex items-center gap-1">
+                {HIST_RANGES.map(r => (
+                  <button key={r} onClick={() => setHistoryRange(r)}
+                    className={`text-[10.5px] px-2.5 py-[3px] rounded transition-colors ${
+                      historyRange === r
+                        ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
+                        : 'border border-gray-200 dark:border-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                    }`}>{r}</button>
+                ))}
+              </div>
             </div>
           </div>
-          {chartMode === '$' && hasStackedNavHistory ? (() => {
+          {chartMode === '$' && hasStackedNavHistory && historyRange !== '1D' ? (() => {
             const stackedAccounts = portfolioAccounts.filter(a =>
               selectedAccountIds === null || selectedAccountIds.has(a.id)
             )
@@ -1836,7 +2074,74 @@ export default function Investments() {
                 </div>
               </>
             )
-          })() : historyChartData.length === 0 ? (
+          })() : historyRange === '1D' && perAccountIntradayData !== null ? (() => {
+            const { data: paData, accountIds } = perAccountIntradayData
+            return (
+              <>
+                <div className="h-[210px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart key="1d-per-acct" data={paData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" strokeOpacity={0.4} />
+                      <XAxis dataKey="date" tickFormatter={fmtChartDate} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={40} />
+                      <YAxis
+                        domain={chartMode === '$' ? [0, 'auto'] : ['auto', 'auto']}
+                        tick={{ fontSize: 10 }} tickLine={false} axisLine={false}
+                        tickFormatter={chartMode === '$'
+                          ? (v: number) => formatCompact(v, profile.baseCurrency)
+                          : (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
+                        width={52}
+                      />
+                      {chartMode === '%' && <ReferenceLine y={0} stroke="#9ca3af" strokeDasharray="3 3" />}
+                      <RCTooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null
+                          const items = (payload as any[]).filter(p => p.value != null)
+                          return (
+                            <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl min-w-[160px]">
+                              <div className="text-gray-400 mb-1">{fmtChartDate(label as string)}</div>
+                              {items.map((p, i) => {
+                                const isspy = p.dataKey === 'spy'
+                                const accId = isspy ? null : Number(String(p.dataKey).replace('acc_', '').replace('_usd', ''))
+                                const acct = accId != null ? portfolioAccounts.find(a => a.id === accId) : null
+                                return (
+                                  <div key={i} className="flex justify-between gap-3">
+                                    <span style={{ color: p.stroke }}>{isspy ? 'SPY' : (acct?.name ?? p.dataKey)}</span>
+                                    <span className={chartMode === '$' ? '' : returnClass(p.value as number)}>
+                                      {chartMode === '$'
+                                        ? formatCurrency(p.value as number, profile.baseCurrency)
+                                        : fmtReturn((p.value as number) / 100)}
+                                    </span>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )
+                        }}
+                      />
+                      {accountIds.map((id, i) => (
+                        <Line key={id} type="monotone" dataKey={chartMode === '$' ? `acc_${id}_usd` : `acc_${id}`}
+                          stroke={STACK_COLORS[i % STACK_COLORS.length]} strokeWidth={1.5}
+                          dot={false} connectNulls={false} name={portfolioAccounts.find(a => a.id === id)?.name ?? String(id)} />
+                      ))}
+                      {chartMode === '%' && <Line type="monotone" dataKey="spy" stroke="#f97316" strokeWidth={1.5} dot={false} connectNulls={false} name="SPY" />}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex items-center gap-3 mt-1 pb-1 text-[10px] text-gray-400 flex-wrap">
+                  {accountIds.map((id, i) => {
+                    const acct = portfolioAccounts.find(a => a.id === id)
+                    return (
+                      <span key={id} className="flex items-center gap-1">
+                        <span className="w-3 h-[2px] inline-block rounded" style={{ background: STACK_COLORS[i % STACK_COLORS.length] }} />
+                        {acct?.name ?? id}
+                      </span>
+                    )
+                  })}
+                  {chartMode === '%' && <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-orange-400 inline-block rounded" /> SPY</span>}
+                </div>
+              </>
+            )
+          })() : historyChartData.filter(d => (d as any).portfolio != null || (d as any).portfolioValue != null).length === 0 ? (
             <div className="h-[220px] flex items-center justify-center text-[11.5px] text-gray-400">
               {!tiingoApiKey
                 ? 'Set a Tiingo API key in Settings to see history.'
@@ -1875,7 +2180,7 @@ export default function Investments() {
                         return (
                           <div className="bg-gray-900 text-white text-[11px] px-3 py-2 rounded-lg shadow-xl min-w-[160px]">
                             <div className="text-gray-400 mb-1">{fmtChartDate(label as string)}</div>
-                            {port && (
+                            {port && port.value != null && (
                               <div className="flex justify-between gap-3">
                                 <span className="text-blue-400">Portfolio</span>
                                 <span className={chartMode === '$' ? '' : returnClass(port.value as number)}>
@@ -1927,8 +2232,8 @@ export default function Investments() {
                         />
                       ))
                     }
-                    <Line type="monotone" dataKey={chartMode === '$' ? 'portfolioValue' : 'portfolio'} stroke="#3b82f6" strokeWidth={1.5} dot={false} name="Portfolio" connectNulls />
-                    {chartMode === '%' && <Line type="monotone" dataKey="spy" stroke="#f97316" strokeWidth={1.5} dot={false} name="SPY" connectNulls />}
+                    <Line type="monotone" dataKey={chartMode === '$' ? 'portfolioValue' : 'portfolio'} stroke="#3b82f6" strokeWidth={1.5} dot={false} name="Portfolio" connectNulls={false} />
+                    {chartMode === '%' && <Line type="monotone" dataKey="spy" stroke="#f97316" strokeWidth={1.5} dot={false} name="SPY" connectNulls={false} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -2045,23 +2350,8 @@ export default function Investments() {
 
           {/* Accounts list */}
           <Card className="self-start">
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-[11.5px] font-medium text-gray-500 dark:text-gray-400">
-                Accounts
-              </div>
-              <div className="flex items-center gap-2">
-                {portfolioSyncMsg && (
-                  <span className="text-[9.5px] text-gray-400 truncate max-w-[100px]">{portfolioSyncMsg}</span>
-                )}
-                <button
-                  onClick={syncPortfolioAccounts}
-                  disabled={portfolioSyncing || !lmProxyUrl}
-                  title={syncLabel}
-                  className="p-[4px] rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40 transition-colors"
-                >
-                  <RefreshCw size={12} className={portfolioSyncing ? 'animate-spin' : ''} />
-                </button>
-              </div>
+            <div className="text-[11.5px] font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Accounts
             </div>
             {portfolioAccounts.length === 0 ? (
               <div className="text-[11px] text-gray-400">No investment or retirement accounts.</div>

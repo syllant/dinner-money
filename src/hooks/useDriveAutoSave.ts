@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import {
-  getToken, requestToken,
+  getToken,
   getCachedKey, getStoredSalt,
   encryptPayload, driveUpload,
   LS_CONNECTED, LS_LAST_SYNCED,
@@ -14,10 +14,8 @@ async function trySave(): Promise<void> {
   const salt = getStoredSalt()
   if (!key || !salt) return
 
-  let token = getToken()
-  if (!token) {
-    try { token = await requestToken('') } catch { return }
-  }
+  const token = getToken()
+  if (!token) return  // no in-session token — skip silently, no popup
 
   const blob = await encryptPayload(key, serializeStore(), salt)
   await driveUpload(token, blob)

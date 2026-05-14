@@ -18,6 +18,9 @@ function tiingoUrl(path: string, params: URLSearchParams, proxyUrl?: string | nu
 // Fetch dividend history from Tiingo EOD prices. Tiingo reports cash dividends
 // in the `divCash` field on historical price rows.
 export async function fetchTickerDividends(apiKey: string, ticker: string, proxyUrl?: string | null): Promise<TickerDividend[]> {
+  const activeLimit = activeRateLimitRecord(ticker, 'dividends')
+  if (activeLimit) throw new TiingoRateLimitError(ticker.toUpperCase(), 'dividends', activeLimit.retryAt, false)
+
   const params = new URLSearchParams({
     startDate: '1990-01-01',
     token: apiKey,
@@ -28,7 +31,9 @@ export async function fetchTickerDividends(apiKey: string, ticker: string, proxy
       'Content-Type': 'application/json',
     },
   })
+  if (res.status === 429) throw reportRateLimit(ticker, 'dividends', res, false)
   if (!res.ok) throw new Error(`Tiingo returned ${res.status}`)
+  clearRateLimitRecord(ticker, 'dividends')
   const data = await res.json()
   if (!Array.isArray(data)) {
     const detail = typeof data?.detail === 'string' ? data.detail : 'Unexpected Tiingo response'
@@ -54,12 +59,101 @@ export interface MonthlyTickerReturn {
   return: number
 }
 
+export interface TiingoRateLimitRecord {
+  symbol: string
+  endpoint: string
+  limitedAt: string
+  retryAt: string
+  usedCache: boolean
+}
+
+const TIINGO_RATE_LIMIT_KEY = 'dinner-money:tiingo-rate-limit'
+const TIINGO_RATE_LIMIT_EVENT = 'dinner-money:tiingo-rate-limit'
+const DEFAULT_RATE_LIMIT_RETRY_MS = 60 * 60 * 1000
+
 export class TiingoRateLimitError extends Error {
-  constructor(public ticker: string) {
+  constructor(
+    public ticker: string,
+    public endpoint = 'unknown',
+    public retryAt = new Date(Date.now() + DEFAULT_RATE_LIMIT_RETRY_MS).toISOString(),
+    public usedCache = false,
+  ) {
     super(`Tiingo ${ticker} rate limited`)
     this.name = 'TiingoRateLimitError'
   }
 }
+
+function parseRetryAt(res: Response): string {
+  const retryAfter = res.headers.get('Retry-After')
+  if (retryAfter) {
+    const seconds = Number(retryAfter)
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return new Date(Date.now() + seconds * 1000).toISOString()
+    }
+    const dateMs = new Date(retryAfter).getTime()
+    if (Number.isFinite(dateMs) && dateMs > Date.now()) return new Date(dateMs).toISOString()
+  }
+  return new Date(Date.now() + DEFAULT_RATE_LIMIT_RETRY_MS).toISOString()
+}
+
+function readRateLimitRecords(): TiingoRateLimitRecord[] {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TIINGO_RATE_LIMIT_KEY) ?? '[]') as TiingoRateLimitRecord[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function writeRateLimitRecords(records: TiingoRateLimitRecord[]) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(TIINGO_RATE_LIMIT_KEY, JSON.stringify(records))
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(TIINGO_RATE_LIMIT_EVENT))
+  } catch {}
+}
+
+function clearRateLimitRecord(symbol: string, endpoint: string) {
+  const now = Date.now()
+  const next = readRateLimitRecords().filter(r =>
+    new Date(r.retryAt).getTime() > now && !(r.symbol === symbol.toUpperCase() && r.endpoint === endpoint)
+  )
+  writeRateLimitRecords(next)
+}
+
+function activeRateLimitRecord(symbol: string, endpoint: string): TiingoRateLimitRecord | null {
+  const upper = symbol.toUpperCase()
+  const now = Date.now()
+  return readRateLimitRecords().find(r =>
+    r.symbol === upper && r.endpoint === endpoint && new Date(r.retryAt).getTime() > now
+  ) ?? null
+}
+
+function reportRateLimit(symbol: string, endpoint: string, res: Response, usedCache: boolean): TiingoRateLimitError {
+  const upper = symbol.toUpperCase()
+  const record: TiingoRateLimitRecord = {
+    symbol: upper,
+    endpoint,
+    limitedAt: new Date().toISOString(),
+    retryAt: parseRetryAt(res),
+    usedCache,
+  }
+  const rest = readRateLimitRecords().filter(r => !(r.symbol === upper && r.endpoint === endpoint))
+  writeRateLimitRecords([record, ...rest].slice(0, 8))
+  return new TiingoRateLimitError(upper, endpoint, record.retryAt, usedCache)
+}
+
+export function readTiingoRateLimits(): TiingoRateLimitRecord[] {
+  const now = Date.now()
+  const active = readRateLimitRecords()
+    .filter(r => new Date(r.retryAt).getTime() > now)
+    .sort((a, b) => new Date(a.retryAt).getTime() - new Date(b.retryAt).getTime())
+  if (active.length !== readRateLimitRecords().length) writeRateLimitRecords(active)
+  return active
+}
+
+export { TIINGO_RATE_LIMIT_EVENT }
 
 interface CachedMonthlyReturns {
   savedAt: number
@@ -110,6 +204,12 @@ export async function fetchMonthlyAdjustedReturns(
 ): Promise<MonthlyTickerReturn[]> {
   const cached = readMonthlyReturnCache(ticker, startDate)
   if (cached) return cached
+  const activeLimit = activeRateLimitRecord(ticker, 'monthly returns')
+  if (activeLimit) {
+    const stale = readMonthlyReturnCache(ticker, startDate, true)
+    if (stale) return stale
+    throw new TiingoRateLimitError(ticker.toUpperCase(), 'monthly returns', activeLimit.retryAt, false)
+  }
 
   const params = new URLSearchParams({
     startDate,
@@ -123,10 +223,12 @@ export async function fetchMonthlyAdjustedReturns(
   })
   if (res.status === 429) {
     const stale = readMonthlyReturnCache(ticker, startDate, true)
+    const err = reportRateLimit(ticker, 'monthly returns', res, Boolean(stale))
     if (stale) return stale
-    throw new TiingoRateLimitError(ticker.toUpperCase())
+    throw err
   }
   if (!res.ok) throw new Error(`Tiingo ${ticker} returned ${res.status}`)
+  clearRateLimitRecord(ticker, 'monthly returns')
   const data = await res.json()
   if (!Array.isArray(data)) {
     const detail = typeof data?.detail === 'string' ? data.detail : 'Unexpected Tiingo response'
@@ -234,6 +336,12 @@ export async function fetchRecentDailyReturns(
 ): Promise<DailyTickerReturn[]> {
   const cached = readDailyReturnCache(ticker)
   if (cached) return cached
+  const activeLimit = activeRateLimitRecord(ticker, 'daily returns')
+  if (activeLimit) {
+    const stale = readDailyReturnCache(ticker, true)
+    if (stale) return stale
+    throw new TiingoRateLimitError(ticker.toUpperCase(), 'daily returns', activeLimit.retryAt, false)
+  }
 
   const start = new Date()
   start.setDate(start.getDate() - days)
@@ -243,10 +351,12 @@ export async function fetchRecentDailyReturns(
     const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } })
     if (res.status === 429) {
       const stale = readDailyReturnCache(ticker, true)
+      const err = reportRateLimit(ticker, 'daily returns', res, Boolean(stale))
       if (stale) return stale
-      throw new TiingoRateLimitError(ticker.toUpperCase())
+      throw err
     }
     if (!res.ok) return []
+    clearRateLimitRecord(ticker, 'daily returns')
     const data = await res.json()
     if (!Array.isArray(data)) return []
     const sorted = (data as TiingoPriceRow[])
@@ -311,6 +421,12 @@ export async function fetchDailyPrices(
 ): Promise<DailyPricePoint[]> {
   const cached = readDailyPriceCache(ticker, startDate)
   if (cached) return cached
+  const activeLimit = activeRateLimitRecord(ticker, 'daily prices')
+  if (activeLimit) {
+    const stale = readDailyPriceCache(ticker, startDate, true)
+    if (stale) return stale
+    throw new TiingoRateLimitError(ticker.toUpperCase(), 'daily prices', activeLimit.retryAt, false)
+  }
 
   const params = new URLSearchParams({ startDate, token: apiKey })
   const url = tiingoUrl(`/tiingo/daily/${encodeURIComponent(ticker)}/prices`, params, proxyUrl)
@@ -318,10 +434,12 @@ export async function fetchDailyPrices(
 
   if (res.status === 429) {
     const stale = readDailyPriceCache(ticker, startDate, true)
+    const err = reportRateLimit(ticker, 'daily prices', res, Boolean(stale))
     if (stale) return stale
-    throw new TiingoRateLimitError(ticker.toUpperCase())
+    throw err
   }
   if (!res.ok) throw new Error(`Tiingo ${ticker} returned ${res.status}`)
+  clearRateLimitRecord(ticker, 'daily prices')
 
   const data = await res.json()
   if (!Array.isArray(data)) {
@@ -336,6 +454,165 @@ export async function fetchDailyPrices(
 
   writeDailyPriceCache(ticker, startDate, points)
   return points
+}
+
+export interface IntradayPricePoint {
+  date: string   // ISO 8601 with timezone, e.g. "2025-05-12T13:30:00+00:00"
+  close: number
+}
+
+const INTRADAY_CACHE_PREFIX = 'dinner-money:tiingo-intraday:'
+const INTRADAY_CACHE_TTL_MS = 15 * 60 * 1000 // 15 minutes
+
+interface CachedIntraday { savedAt: number; data: IntradayPricePoint[] }
+
+function intradayCacheKey(ticker: string): string {
+  return `${INTRADAY_CACHE_PREFIX}${ticker.toUpperCase()}`
+}
+
+function readIntradayCache(ticker: string, allowStale = false): IntradayPricePoint[] | null {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(intradayCacheKey(ticker))
+    if (!raw) return null
+    const cached = JSON.parse(raw) as CachedIntraday
+    if (!Array.isArray(cached.data)) return null
+    if (!allowStale && Date.now() - cached.savedAt > INTRADAY_CACHE_TTL_MS) return null
+    return cached.data
+  } catch { return null }
+}
+
+function writeIntradayCache(ticker: string, data: IntradayPricePoint[]) {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(intradayCacheKey(ticker), JSON.stringify({ savedAt: Date.now(), data }))
+  } catch {}
+}
+
+export async function fetchIntradayPrices(
+  apiKey: string,
+  ticker: string,
+  proxyUrl?: string | null,
+): Promise<IntradayPricePoint[]> {
+  const cached = readIntradayCache(ticker)
+  if (cached) return cached
+  const activeLimit = activeRateLimitRecord(ticker, 'intraday prices')
+  if (activeLimit) {
+    const stale = readIntradayCache(ticker, true)
+    if (stale) return stale
+    throw new TiingoRateLimitError(ticker.toUpperCase(), 'intraday prices', activeLimit.retryAt, false)
+  }
+
+  // Fetch last 2 calendar days to cover late-session or next-morning requests
+  const start = new Date()
+  start.setDate(start.getDate() - 2)
+  const params = new URLSearchParams({
+    startDate: start.toISOString().slice(0, 10),
+    resampleFreq: '1hour',
+    columns: 'date,close',
+    token: apiKey,
+  })
+  const url = tiingoUrl(`/iex/${encodeURIComponent(ticker)}/prices`, params, proxyUrl)
+  try {
+    const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } })
+    if (res.status === 429) {
+      const stale = readIntradayCache(ticker, true)
+      const err = reportRateLimit(ticker, 'intraday prices', res, Boolean(stale))
+      if (stale) return stale
+      throw err
+    }
+    if (!res.ok) return []
+    clearRateLimitRecord(ticker, 'intraday prices')
+    const data = await res.json()
+    if (!Array.isArray(data)) return []
+    const result: IntradayPricePoint[] = (data as Array<{ date?: string; close?: number }>)
+      .map(row => ({ date: row.date ?? '', close: Number(row.close) || 0 }))
+      .filter(r => r.date && r.close > 0)
+      .sort((a, b) => a.date.localeCompare(b.date))
+    writeIntradayCache(ticker, result)
+    return result
+  } catch (err) {
+    if (err instanceof TiingoRateLimitError) throw err
+    return []
+  }
+}
+
+// ── Intraday FX rates (Tiingo forex endpoint) ──────────────────────────────────
+
+export interface IntradayFxPoint {
+  date: string   // ISO 8601 with timezone
+  close: number  // mid-price
+}
+
+const INTRADAY_FX_CACHE_PREFIX = 'dinner-money:tiingo-intraday-fx:'
+const INTRADAY_FX_CACHE_TTL_MS = 15 * 60 * 1000
+
+function intradayFxCacheKey(pair: string): string {
+  return `${INTRADAY_FX_CACHE_PREFIX}${pair.toLowerCase()}`
+}
+
+function readIntradayFxCache(pair: string, allowStale = false): IntradayFxPoint[] | null {
+  try {
+    const raw = localStorage.getItem(intradayFxCacheKey(pair))
+    if (!raw) return null
+    const { savedAt, data } = JSON.parse(raw) as { savedAt: number; data: IntradayFxPoint[] }
+    if (!Array.isArray(data)) return null
+    if (!allowStale && Date.now() - savedAt > INTRADAY_FX_CACHE_TTL_MS) return null
+    return data
+  } catch { return null }
+}
+
+function writeIntradayFxCache(pair: string, data: IntradayFxPoint[]) {
+  try {
+    localStorage.setItem(intradayFxCacheKey(pair), JSON.stringify({ savedAt: Date.now(), data }))
+  } catch {}
+}
+
+export async function fetchIntradayFxRates(
+  apiKey: string,
+  pair: string,
+  proxyUrl?: string | null,
+): Promise<IntradayFxPoint[]> {
+  const cached = readIntradayFxCache(pair)
+  if (cached) return cached
+  const activeLimit = activeRateLimitRecord(pair, 'intraday FX')
+  if (activeLimit) {
+    const stale = readIntradayFxCache(pair, true)
+    if (stale) return stale
+    throw new TiingoRateLimitError(pair.toUpperCase(), 'intraday FX', activeLimit.retryAt, false)
+  }
+
+  const start = new Date()
+  start.setDate(start.getDate() - 2)
+  const params = new URLSearchParams({
+    startDate: start.toISOString().slice(0, 10),
+    resampleFreq: '1Hour',
+    columns: 'date,close',
+    token: apiKey,
+  })
+  const url = tiingoUrl(`/tiingo/fx/${encodeURIComponent(pair)}/prices`, params, proxyUrl)
+  try {
+    const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } })
+    if (res.status === 429) {
+      const stale = readIntradayFxCache(pair, true)
+      const err = reportRateLimit(pair, 'intraday FX', res, Boolean(stale))
+      if (stale) return stale
+      throw err
+    }
+    if (!res.ok) return []
+    clearRateLimitRecord(pair, 'intraday FX')
+    const data = await res.json()
+    if (!Array.isArray(data)) return []
+    const result: IntradayFxPoint[] = (data as Array<{ date?: string; close?: number }>)
+      .map(row => ({ date: row.date ?? '', close: Number(row.close) || 0 }))
+      .filter(r => r.date && r.close > 0)
+      .sort((a, b) => a.date.localeCompare(b.date))
+    writeIntradayFxCache(pair, result)
+    return result
+  } catch (err) {
+    if (err instanceof TiingoRateLimitError) throw err
+    return []
+  }
 }
 
 export function projectDividends(

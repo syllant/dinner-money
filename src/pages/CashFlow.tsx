@@ -31,6 +31,7 @@ function currencySymbol(cur: string): string {
 function computeAnnualDivEUR(
   accounts: Account[],
   dividendHistory: Record<string, import('../lib/tiingo').TickerDividend[]>,
+  fxRate: number = DEFAULT_EUR_USD_RATE,
 ): number {
   const invAccounts = accounts.filter(
     a => (a.type === 'investment' || a.type === 'retirement') && a.includedInPlanning !== false
@@ -52,11 +53,11 @@ function computeAnnualDivEUR(
       const projected = projectDividends(h.ticker, hist, h.quantity, 13)
         .filter(d => d.paymentDate >= todayStr && d.paymentDate <= yearLaterStr)
       for (const d of projected) {
-        tiingoTotal += convertToBase(d.totalAmount, h.currency, 'EUR', DEFAULT_EUR_USD_RATE)
+        tiingoTotal += convertToBase(d.totalAmount, h.currency, 'EUR', fxRate)
       }
     }
   }
-  return hasTiingo && tiingoTotal > 0 ? tiingoTotal : projectedAnnualDividendsEUR(invAccounts, DEFAULT_EUR_USD_RATE)
+  return hasTiingo && tiingoTotal > 0 ? tiingoTotal : projectedAnnualDividendsEUR(invAccounts, fxRate)
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -909,7 +910,7 @@ export default function CashFlow() {
   const {
     accounts, expenses, medicalCoverages, medicalExpenses,
     pensions, profile, realEstateEvents, windfalls, taxConfig, transfers,
-    dividendHistory, minTransactionEUR,
+    dividendHistory, minTransactionEUR, liveEurUsdRate,
   } = useAppStore()
 
   const cashAccounts = accounts.filter(a => a.type === 'cash' && a.includedInPlanning !== false)
@@ -919,7 +920,7 @@ export default function CashFlow() {
   const usdCash = usdAccounts.reduce((s, a) => s + a.balance, 0)
   const eurCash = eurAccounts.reduce((s, a) => s + a.balance, 0)
 
-  const annualDivEUR = computeAnnualDivEUR(accounts, dividendHistory)
+  const annualDivEUR = computeAnnualDivEUR(accounts, dividendHistory, liveEurUsdRate)
 
   const [projectionMode, setProjectionMode] = useLocalStorage<'year' | 'next12'>('cashflow.projectionMode', 'next12')
   const currentYear = new Date().getFullYear()
@@ -948,14 +949,14 @@ export default function CashFlow() {
     : 0
   const usdMonthDiff = m0
     ? (m0.accountBalances.filter(a => a.currency === 'USD').reduce((s, a) => s + a.balanceEUR, 0)
-       - m0.openingAccountBalances.filter(a => a.currency === 'USD').reduce((s, a) => s + a.balanceEUR, 0)) * DEFAULT_EUR_USD_RATE
+       - m0.openingAccountBalances.filter(a => a.currency === 'USD').reduce((s, a) => s + a.balanceEUR, 0)) * liveEurUsdRate
     : 0
 
   const projectionEndLabel = projection.length > 0 ? projection[projection.length - 1].label : ''
   const currentMonthLabel = m0?.label ?? ''
 
   // Consolidated cash (all currencies → EUR)
-  const totalCashEUR = eurCash + usdCash / DEFAULT_EUR_USD_RATE
+  const totalCashEUR = eurCash + usdCash / liveEurUsdRate
   const lastMonth = projection.length > 0 ? projection[projection.length - 1] : null
   const projectedCashEUR = lastMonth
     ? lastMonth.accountBalances.reduce((s, a) => s + a.balanceEUR, 0)
@@ -968,7 +969,7 @@ export default function CashFlow() {
       const month = projection[i]
       const native = month.accountBalances
         .filter(a => a.currency === cur)
-        .reduce((s, a) => s + (cur === 'EUR' ? a.balanceEUR : a.balanceEUR * DEFAULT_EUR_USD_RATE), 0)
+        .reduce((s, a) => s + (cur === 'EUR' ? a.balanceEUR : a.balanceEUR * liveEurUsdRate), 0)
       if (native < 0) {
         const prevLabel = i > 0 ? projection[i - 1].label : month.label
         return { label: month.label, shortage: Math.ceil(-native), prevLabel }

@@ -4,6 +4,7 @@ import { syncIbkrFlexAccounts } from './ibkrFlex'
 import type { Account } from '../types'
 
 export const LM_FULL_SYNC_TTL = 24 * 60 * 60 * 1000
+export const LM_FAST_SYNC_TTL = 60 * 60 * 1000
 
 export async function syncAllAccounts(params: {
   lmApiKey: string
@@ -12,8 +13,9 @@ export async function syncAllAccounts(params: {
   ibkrFlexQueryId: string | null
   existingAccounts: Account[]
   allowIbkrSync?: boolean
+  allowPlaidSync?: boolean
 }): Promise<Account[]> {
-  const { lmApiKey, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId, existingAccounts, allowIbkrSync = true } = params
+  const { lmApiKey, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId, existingAccounts, allowIbkrSync = true, allowPlaidSync = true } = params
 
   const { manual, synced } = await fetchAllAccounts(lmApiKey, lmProxyUrl)
   const now = new Date().toISOString()
@@ -75,7 +77,16 @@ export async function syncAllAccounts(params: {
     }
   })
 
-  if (lmProxyUrl) {
+  // Override balances for connected accounts with authoritative broker data.
+  // IBKR: use latest navHistory entry (populated by full sync; survives fast syncs).
+  // Plaid: syncPlaidInvestmentAccount below sets balance from holdings sum.
+  for (const acc of merged) {
+    if (acc.ibkrAccountId?.trim() && acc.navHistory?.length) {
+      acc.balance = acc.navHistory[acc.navHistory.length - 1].value
+    }
+  }
+
+  if (allowPlaidSync && lmProxyUrl) {
     for (const acc of merged) {
       if (acc.plaidAccessToken && !acc.ibkrAccountId) {
         try {
@@ -90,7 +101,23 @@ export async function syncAllAccounts(params: {
 
   if (allowIbkrSync && lmProxyUrl && ibkrFlexToken && ibkrFlexQueryId && merged.some(acc => acc.ibkrAccountId?.trim())) {
     merged = await syncIbkrFlexAccounts(merged, lmProxyUrl, ibkrFlexToken, ibkrFlexQueryId)
+    // syncIbkrFlexAccounts already computes balance from fresh holdings, so no further override needed.
   }
 
   return merged
+}
+
+/** Fast sync: updates LunchMoney account balances only. Skips Plaid and IBKR Flex. */
+export async function fastSyncAccounts(params: {
+  lmApiKey: string
+  lmProxyUrl: string | null
+  existingAccounts: Account[]
+}): Promise<Account[]> {
+  return syncAllAccounts({
+    ...params,
+    ibkrFlexToken: null,
+    ibkrFlexQueryId: null,
+    allowIbkrSync: false,
+    allowPlaidSync: false,
+  })
 }

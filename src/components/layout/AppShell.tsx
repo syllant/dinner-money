@@ -1,14 +1,60 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '../../store/useAppStore'
 import { syncPlaidInvestmentAccounts } from '../../lib/investmentSync'
 import { syncIbkrFlexAccounts } from '../../lib/ibkrFlex'
 import { syncAllAccounts, LM_FULL_SYNC_TTL } from '../../lib/lmSync'
 import { useDriveAutoSave } from '../../hooks/useDriveAutoSave'
+import { readTiingoRateLimits, TIINGO_RATE_LIMIT_EVENT } from '../../lib/tiingo'
+import { Banner } from '../ui/Banner'
 import { Sidebar } from './Sidebar'
 
 const AUTO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000
 const PLAID_AUTO_SYNC_KEY = 'dinner-money:plaid-investment-auto-sync'
 const IBKR_FLEX_AUTO_SYNC_KEY = 'dinner-money:ibkr-flex-auto-sync'
+
+function retryLabel(iso: string): string {
+  const date = new Date(iso)
+  const diffMs = date.getTime() - Date.now()
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return 'now'
+  const minutes = Math.ceil(diffMs / 60_000)
+  if (minutes < 60) return `in ${minutes} min`
+  return `around ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+}
+
+function TiingoRateLimitBanner() {
+  const [records, setRecords] = useState(() => readTiingoRateLimits())
+
+  useEffect(() => {
+    const refresh = () => setRecords(readTiingoRateLimits())
+    window.addEventListener(TIINGO_RATE_LIMIT_EVENT, refresh)
+    const id = setInterval(refresh, 60_000)
+    return () => {
+      window.removeEventListener(TIINGO_RATE_LIMIT_EVENT, refresh)
+      clearInterval(id)
+    }
+  }, [])
+
+  const message = useMemo(() => {
+    if (records.length === 0) return null
+    const first = records[0]
+    const symbols = records.slice(0, 4).map(r => r.symbol).join(', ')
+    const more = records.length > 4 ? ` +${records.length - 4} more` : ''
+    const cached = records.some(r => r.usedCache)
+    return {
+      text: `Tiingo rate limit reached for ${symbols}${more}. Newer market data cannot be fetched until ${retryLabel(first.retryAt)}; ${cached ? 'using cached values where available.' : 'some market data may be missing until then.'}`,
+    }
+  }, [records])
+
+  if (!message) return null
+
+  return (
+    <div className="sticky top-0 z-50 px-4 pt-3">
+      <Banner variant="warning" className="shadow-sm">
+        {message.text}
+      </Banner>
+    </div>
+  )
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   useDriveAutoSave()
@@ -74,6 +120,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen overflow-hidden bg-white dark:bg-gray-950 text-gray-900 dark:text-white">
       <Sidebar />
       <div className="flex-1 overflow-y-auto min-w-0">
+        <TiingoRateLimitBanner />
         {children}
       </div>
     </div>

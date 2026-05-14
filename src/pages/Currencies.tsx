@@ -10,7 +10,7 @@ import { Card, CardTitle } from '../components/ui/Card'
 import { MetricCard } from '../components/ui/MetricCard'
 import { InfoTooltip } from '../components/ui/InfoTooltip'
 import { useAppStore } from '../store/useAppStore'
-import { fetchEcbDailyExchangeRates } from '../lib/ecb'
+import { fetchEcbDailyExchangeRates, readEcbCache, writeEcbCache, ECB_CACHE_TTL } from '../lib/ecb'
 import { getCombinedEurUsdForecast, type ForecastPoint } from '../lib/currencyForecast'
 
 type PairMode = 'EURUSD' | 'USDEUR'
@@ -169,12 +169,45 @@ export default function Currencies() {
 
   useEffect(() => {
     let cancelled = false
+    const startDate = startDateForRange(range)
+
     async function load() {
+      // Immediately show cached data if available (for instant render)
+      const cached = readEcbCache()
+      if (cached) {
+        const sliced = cached.rows.filter(r => r.date >= startDate)
+        if (sliced.length > 0 && !cancelled) {
+          setRates(sliced.map(row => ({ date: row.date, rate: row.value })))
+        }
+        // Skip network fetch if cache is from today and fresh (within TTL) and not a forced refresh
+        const cacheAge = Date.now() - new Date(cached.fetchedAt).getTime()
+        const cacheIsToday = new Date(cached.fetchedAt).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
+        if (refreshNonce === 0 && cacheIsToday && cacheAge < ECB_CACHE_TTL) {
+          if (!cancelled) setHistoricalLoading(false)
+          if (cancelled) return
+          setForecastLoading(true)
+          try {
+            const forecast = await getCombinedEurUsdForecast({ proxyUrl: lmProxyUrl })
+            if (!cancelled) setForecasts(forecast.points)
+          } catch { if (!cancelled) setForecasts([]) }
+          if (!cancelled) setForecastLoading(false)
+          return
+        }
+      }
+
       setHistoricalLoading(true)
       try {
-        const rows = await fetchEcbDailyExchangeRates(startDateForRange(range), lmProxyUrl)
-        if (!cancelled) setRates(rows.map(row => ({ date: row.date, rate: row.value })))
-      } catch (error) {
+        const rows = await fetchEcbDailyExchangeRates(startDate, lmProxyUrl)
+        if (!cancelled) {
+          setRates(rows.map(row => ({ date: row.date, rate: row.value })))
+          // Update shared cache if this fetch covers >= 1Y of data
+          const cutoff = new Date()
+          cutoff.setFullYear(cutoff.getFullYear() - 1)
+          if (rows.length > 0 && rows[0].date <= cutoff.toISOString().slice(0, 10)) {
+            writeEcbCache(rows)
+          }
+        }
+      } catch {
         if (!cancelled) setRates([])
       }
 
@@ -185,13 +218,9 @@ export default function Currencies() {
       try {
         const forecast = await getCombinedEurUsdForecast({ proxyUrl: lmProxyUrl })
         if (!cancelled) setForecasts(forecast.points)
-      } catch (error) {
-        if (!cancelled) setForecasts([])
-      }
+      } catch { if (!cancelled) setForecasts([]) }
 
-      if (!cancelled) {
-        setForecastLoading(false)
-      }
+      if (!cancelled) setForecastLoading(false)
     }
     load()
     return () => { cancelled = true }

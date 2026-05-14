@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { readEcbCache } from '../lib/ecb'
+import { DEFAULT_EUR_USD_RATE } from '../lib/currency'
 import type {
   UserProfile, Account, PensionEstimate, RealEstateEvent,
   Expense, Windfall, MonteCarloConfig, TaxConfig, SimulationResult,
@@ -140,6 +142,15 @@ interface AppState {
   setTransfers: (transfers: Transfer[]) => void
   upsertTransfer: (transfer: Transfer) => void
   deleteTransfer: (id: string) => void
+  /** Live ECB EUR/USD spot rate — updated by sidebar on load, NOT persisted */
+  liveEurUsdRate: number
+  setLiveEurUsdRate: (rate: number) => void
+  /** Timestamp of last fast-sync (LM balances only). Runtime — not persisted. */
+  fastSyncedAt: string | null
+  setFastSyncedAt: (at: string | null) => void
+  /** Timestamp of last full-sync (LM + Plaid + IBKR). Runtime — not persisted. */
+  fullSyncedAt: string | null
+  setFullSyncedAt: (at: string | null) => void
   setSimulationResult: (result: SimulationResult | null) => void
   setSimulationRunning: (running: boolean) => void
   setPortfolioSnapshot: (snap: AppState['portfolioSnapshot']) => void
@@ -177,6 +188,12 @@ export const useAppStore = create<AppState>()(
       simulationResult: null,
       simulationRunning: false,
       portfolioSnapshot: null,
+      fastSyncedAt: null,
+      fullSyncedAt: null,
+      liveEurUsdRate: (() => {
+        try { const c = readEcbCache(); if (c?.rows?.length) return c.rows[c.rows.length - 1].value } catch {}
+        return DEFAULT_EUR_USD_RATE
+      })(),
 
       // Actions
       setLmApiKey: (key) => set({ lmApiKey: key }),
@@ -353,6 +370,9 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ transfers: s.transfers.filter((t) => t.id !== id) })),
 
       setMinTransactionEUR: (minTransactionEUR) => set({ minTransactionEUR }),
+      setLiveEurUsdRate: (liveEurUsdRate) => set({ liveEurUsdRate }),
+      setFastSyncedAt: (fastSyncedAt) => set({ fastSyncedAt }),
+      setFullSyncedAt: (fullSyncedAt) => set({ fullSyncedAt }),
       setSimulationResult: (simulationResult) => set({ simulationResult }),
       setSimulationRunning: (simulationRunning) => set({ simulationRunning }),
       setPortfolioSnapshot: (portfolioSnapshot) => set({ portfolioSnapshot }),
@@ -388,6 +408,7 @@ export const useAppStore = create<AppState>()(
         dividendHistory: s.dividendHistory,
         dividendSyncedAt: s.dividendSyncedAt,
         portfolioSnapshot: s.portfolioSnapshot,
+        fullSyncedAt: s.fullSyncedAt,
       }),
       merge: (persistedState: any, currentState) => {
         if (persistedState.avApiKey && !persistedState.tiingoApiKey) {

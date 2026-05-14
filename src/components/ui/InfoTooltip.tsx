@@ -35,7 +35,7 @@ export function InfoTooltip({ text, position = 'center', interactive = false, tr
         {trigger ?? '?'}
       </span>
       <span
-        className={`fixed w-64 bg-gray-900 dark:bg-gray-700 text-white text-[10px] leading-[1.4] px-2.5 py-2 rounded-lg shadow-xl ${open ? 'opacity-100' : 'opacity-0'} ${interactive ? 'pointer-events-auto' : 'pointer-events-none'} z-50 whitespace-normal text-left font-normal normal-case transition-opacity duration-100`}
+        className={`fixed w-64 bg-gray-900 dark:bg-gray-700 text-white text-[10px] leading-[1.4] px-2.5 py-2 rounded-lg shadow-xl ${open ? 'opacity-100' : 'opacity-0'} ${interactive && open ? 'pointer-events-auto' : 'pointer-events-none'} z-50 whitespace-normal text-left font-normal normal-case transition-opacity duration-100`}
         style={{
           left: coords.left,
           top: coords.top,

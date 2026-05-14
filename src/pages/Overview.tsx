@@ -791,12 +791,14 @@ function CohortDetailsModal({
   onSelect,
   onClose,
   currency,
+  fxRate = DEFAULT_EUR_USD_RATE,
 }: {
   cohort: NonNullable<SimulationResult['cohortSummaries']>[number]
   cohorts: NonNullable<SimulationResult['cohortSummaries']>
   onSelect: (startMonth: string) => void
   onClose: () => void
   currency: 'EUR' | 'USD'
+  fxRate?: number
 }) {
   const [selectedSeries, setSelectedSeries] = useState<string[]>(() => {
     try {
@@ -829,8 +831,8 @@ function CohortDetailsModal({
   const rows = visibleCohort?.yearlyInputs ?? []
   const chartRows = rows.map(row => ({
     ...row,
-    liquidNetWorth: convertToBase(row.liquidNetWorth, 'EUR', currency, DEFAULT_EUR_USD_RATE),
-    netFlowEUR: convertToBase(row.netFlowEUR, 'EUR', currency, DEFAULT_EUR_USD_RATE),
+    liquidNetWorth: convertToBase(row.liquidNetWorth, 'EUR', currency, fxRate),
+    netFlowEUR: convertToBase(row.netFlowEUR, 'EUR', currency, fxRate),
   }))
   const yearTicks = rows
     .map(point => point.cohortYear)
@@ -861,7 +863,7 @@ function CohortDetailsModal({
   }
 
   function formatCohortValue(seriesKey: string, value: number): string {
-    if (seriesKey === 'liquidNetWorth' || seriesKey === 'netFlowEUR') return formatCurrency(convertToBase(value, 'EUR', currency, DEFAULT_EUR_USD_RATE), currency)
+    if (seriesKey === 'liquidNetWorth' || seriesKey === 'netFlowEUR') return formatCurrency(convertToBase(value, 'EUR', currency, fxRate), currency)
     return `${value.toFixed(2)}%`
   }
 
@@ -941,7 +943,7 @@ function CohortDetailsModal({
             >
               {filteredCohorts.map(item => (
                 <option key={item.startMonth} value={item.startMonth}>
-                  {item.survived ? '●' : '◆'} | {item.startMonth} | {formatCompact(convertToBase(item.endingNetWorth, 'EUR', currency, DEFAULT_EUR_USD_RATE), currency)} | P{item.percentile.toFixed(0)}
+                  {item.survived ? '●' : '◆'} | {item.startMonth} | {formatCompact(convertToBase(item.endingNetWorth, 'EUR', currency, fxRate), currency)} | P{item.percentile.toFixed(0)}
                 </option>
               ))}
             </select>
@@ -1039,6 +1041,7 @@ function projectedAccountsForYear(
   year: number,
   currentYear: number,
   assumptions: ProjectionAssumptions,
+  fxRate: number = DEFAULT_EUR_USD_RATE,
 ): ProjectedAccount[] {
   const activeAccounts = projectedAccountsBy(`${year}-12`, {
     accounts,
@@ -1060,7 +1063,7 @@ function projectedAccountsForYear(
       const yearsElapsed = Math.max(0, year - startYear)
       const annualReturn = accountAnnualReturn(acc, assumptions)
       const amountNative = acc.balance * Math.pow(1 + annualReturn / 100, yearsElapsed)
-      const eurUsdRate = DEFAULT_EUR_USD_RATE * Math.pow(1 + assumptions.eurUsdDrift / 100, yearsElapsed)
+      const eurUsdRate = fxRate * Math.pow(1 + assumptions.eurUsdDrift / 100, yearsElapsed)
       const amountBase = convertToBase(amountNative, acc.currency, 'EUR', eurUsdRate)
 
       return {
@@ -1317,7 +1320,7 @@ function signedClass(amount: number | null | undefined): string {
 
 function ProjectionViews({
   result, expenses, medicalCoverages, medicalExpenses, pensions, windfalls, realEstateEvents, accounts, profile,
-  config, taxConfig, onApplySettings, running, minTransactionEUR, transfers, openCohortsRequest
+  config, taxConfig, onApplySettings, running, minTransactionEUR, transfers, openCohortsRequest, fxRate
 }: {
   result: SimulationResult
   expenses: Expense[]
@@ -1335,6 +1338,7 @@ function ProjectionViews({
   minTransactionEUR: number
   transfers: Transfer[]
   openCohortsRequest: number
+  fxRate: number
 }) {
   const [showSimSettings, setShowSimSettings] = useState(false)
   const [showProjectionSettings, setShowProjectionSettings] = useState(false)
@@ -1355,9 +1359,9 @@ function ProjectionViews({
   const allExp = allExpensesOf(expenses, medicalCoverages, medicalExpenses)
   const currentYear = new Date().getFullYear()
   const currentMonthNumber = new Date().getMonth() + 1
-  const annualProjectedDiv = Math.round(projectedAnnualDividendsEUR(accounts, DEFAULT_EUR_USD_RATE))
+  const annualProjectedDiv = Math.round(projectedAnnualDividendsEUR(accounts, fxRate))
   const displayCurrency = profile.baseCurrency
-  const displayFromEUR = (amount: number) => convertToBase(amount, 'EUR', displayCurrency, DEFAULT_EUR_USD_RATE)
+  const displayFromEUR = (amount: number) => convertToBase(amount, 'EUR', displayCurrency, fxRate)
 
   const eventsByYear = events.reduce<Record<number, LifeEvent[]>>((acc, ev) => {
     if (!acc[ev.year]) acc[ev.year] = []
@@ -1419,6 +1423,7 @@ function ProjectionViews({
       y,
       currentYear,
       projectionAssumptions,
+      fxRate,
     )
     const projectedAccounts = projectedAccountsEUR.map(account => ({
       ...account,
@@ -1501,8 +1506,8 @@ function ProjectionViews({
     incomeItems.push(...transferItems.incomeItems)
     expenseItems.push(...transferItems.expenseItems)
 
-    const income = Math.round(incomeItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE), 0))
-    const expense = Math.round(expenseItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE), 0))
+    const income = Math.round(incomeItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate), 0))
+    const expense = Math.round(expenseItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate), 0))
     const taxEstimate = estimateAnnualIncomeTaxes({
       year: y - 1,
       profile,
@@ -1519,13 +1524,13 @@ function ProjectionViews({
     const settlementTaxItems = taxSettlementItemsForYear(taxConfig, y)
     const modeledTax = Math.round(displayFromEUR(taxEstimate.totalEUR))
     const scheduledTax = Math.round(scheduledTaxItems.reduce(
-      (s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE),
+      (s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate),
       0,
     ))
     const baseTaxItems = scheduledTax > modeledTax ? scheduledTaxItems : modeledTaxItems
     taxItems.push(...baseTaxItems, ...settlementTaxItems)
     const settlementTax = Math.round(settlementTaxItems.reduce(
-      (s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE),
+      (s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate),
       0,
     ))
     const tax = Math.max(modeledTax, scheduledTax) + settlementTax
@@ -1560,7 +1565,7 @@ function ProjectionViews({
       name: account.name,
       type: account.type,
       currency: account.currency,
-      amountBase: convertToBase(account.balance, account.currency, displayCurrency, DEFAULT_EUR_USD_RATE),
+      amountBase: convertToBase(account.balance, account.currency, displayCurrency, fxRate),
       amountNative: account.balance,
     }))
   const ytdIncomeItems: AnnualItem[] = []
@@ -1615,9 +1620,9 @@ function ProjectionViews({
   ytdExpenseItems.push(...ytdTransferItems.expenseItems)
   ytdTaxItems.push(...ytdQuarterlyTaxPaymentItems(taxConfig, currentYear, currentMonthNumber))
   ytdTaxItems.push(...taxSettlementItemsForYear(taxConfig, currentYear, currentMonthNumber))
-  const ytdIncome = Math.round(ytdIncomeItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE), 0))
-  const ytdExpense = Math.round(ytdExpenseItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE), 0))
-  const ytdTax = Math.round(ytdTaxItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, DEFAULT_EUR_USD_RATE), 0))
+  const ytdIncome = Math.round(ytdIncomeItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate), 0))
+  const ytdExpense = Math.round(ytdExpenseItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate), 0))
+  const ytdTax = Math.round(ytdTaxItems.reduce((s, it) => s + convertToBase(it.amount, it.currency, displayCurrency, fxRate), 0))
   const ytdLiquidNW = Math.round(startingProjectedAccounts.filter(account => isLiquidType(account.type)).reduce((sum, account) => sum + account.amountBase, 0))
   const ytdRealEstateNW = Math.round(startingProjectedAccounts.filter(account => account.type === 'real_estate').reduce((sum, account) => sum + account.amountBase, 0))
   const ytdRow: LifetimePoint & { withdrawal: number } = {
@@ -1774,6 +1779,7 @@ function ProjectionViews({
             onSelect={setSelectedCohortStart}
             onClose={() => setShowCohorts(false)}
             currency={displayCurrency}
+            fxRate={fxRate}
           />
         )}
       </Card>
@@ -2008,7 +2014,8 @@ export default function Overview() {
   const {
     accounts, simulationResult, simulationRunning, setSimulationRunning, setSimulationResult,
     profile, expenses, medicalCoverages, medicalExpenses, pensions, windfalls, realEstateEvents,
-    monteCarloConfig, taxConfig, setMonteCarloConfig, minTransactionEUR, tiingoApiKey, fredApiKey, lmProxyUrl, transfers
+    monteCarloConfig, taxConfig, setMonteCarloConfig, minTransactionEUR, tiingoApiKey, fredApiKey, lmProxyUrl, transfers,
+    liveEurUsdRate,
   } = useAppStore()
   const [simulationError, setSimulationError] = useState<string | null>(null)
   const [simulationProgress, setSimulationProgress] = useState<SimulationProgress | null>(null)
@@ -2061,21 +2068,21 @@ export default function Overview() {
   const currentSimulationCacheKey = useMemo(() => simulationCacheKey(simulationCacheInput), [simulationCacheInput])
 
   const netWorth = includedAccounts.reduce((sum, acc) => {
-    return sum + convertToBase(acc.balance, acc.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    return sum + convertToBase(acc.balance, acc.currency, profile.baseCurrency, liveEurUsdRate)
   }, 0)
   const liquidNetWorth = includedAccounts
     .filter(acc => ['cash', 'investment', 'retirement'].includes(acc.type))
-    .reduce((sum, acc) => sum + convertToBase(acc.balance, acc.currency, profile.baseCurrency, DEFAULT_EUR_USD_RATE), 0)
+    .reduce((sum, acc) => sum + convertToBase(acc.balance, acc.currency, profile.baseCurrency, liveEurUsdRate), 0)
   const lastResultIndex = resultIndex(simulationResult)
   const resultSpread = simulationResult && lastResultIndex >= 0
     ? {
-      p75: convertToBase(Math.max(0, (simulationResult.p90NetWorth[lastResultIndex] ?? 0) - (simulationResult.realEstateNetWorth[lastResultIndex] ?? 0)), 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE),
-      median: convertToBase(Math.max(0, (simulationResult.medianNetWorth[lastResultIndex] ?? 0) - (simulationResult.realEstateNetWorth[lastResultIndex] ?? 0)), 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE),
-      p10: convertToBase(Math.max(0, (simulationResult.p10NetWorth[lastResultIndex] ?? 0) - (simulationResult.realEstateNetWorth[lastResultIndex] ?? 0)), 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE),
+      p75: convertToBase(Math.max(0, (simulationResult.p90NetWorth[lastResultIndex] ?? 0) - (simulationResult.realEstateNetWorth[lastResultIndex] ?? 0)), 'EUR', profile.baseCurrency, liveEurUsdRate),
+      median: convertToBase(Math.max(0, (simulationResult.medianNetWorth[lastResultIndex] ?? 0) - (simulationResult.realEstateNetWorth[lastResultIndex] ?? 0)), 'EUR', profile.baseCurrency, liveEurUsdRate),
+      p10: convertToBase(Math.max(0, (simulationResult.p10NetWorth[lastResultIndex] ?? 0) - (simulationResult.realEstateNetWorth[lastResultIndex] ?? 0)), 'EUR', profile.baseCurrency, liveEurUsdRate),
     }
     : null
   const safeMonthlySpendBase = simulationResult
-    ? convertToBase(simulationResult.safeMonthlySpend, 'EUR', profile.baseCurrency, DEFAULT_EUR_USD_RATE)
+    ? convertToBase(simulationResult.safeMonthlySpend, 'EUR', profile.baseCurrency, liveEurUsdRate)
     : null
 
   async function runSimulation(overrideConfig?: MonteCarloConfig) {
@@ -2133,7 +2140,7 @@ export default function Overview() {
         windfalls,
         realEstateEvents,
         transfers,
-        eurUsdSpot: DEFAULT_EUR_USD_RATE,
+        eurUsdSpot: liveEurUsdRate,
         historicalMarketData,
       })
       worker.onmessage = (e) => {
@@ -2338,6 +2345,7 @@ export default function Overview() {
               minTransactionEUR={minTransactionEUR}
               transfers={transfers}
               openCohortsRequest={openCohortsRequest}
+              fxRate={liveEurUsdRate}
             />
           </>
         ) : (
