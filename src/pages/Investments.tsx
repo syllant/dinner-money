@@ -10,9 +10,10 @@ import { Card } from '../components/ui/Card'
 import { AccountLabel, AccountLogo } from '../components/ui/AccountLabel'
 import { formatCompact, formatCurrency } from '../lib/format'
 import { convertToBase } from '../lib/currency'
+import { accountBaseValue } from '../lib/accountMetrics'
 import { projectedAnnualDividendsEUR } from '../lib/dividends'
 import { projectedAccountsBy } from '../lib/accountLifecycle'
-import { fetchTickerDividends, projectDividends, fetchMonthlyAdjustedReturns, fetchRecentDailyReturns, fetchIntradayPrices } from '../lib/tiingo'
+import { fetchTickerDividends, projectDividends, fetchMonthlyAdjustedReturns, fetchRecentDailyReturns, fetchIntradayPrices, isUsMarketHours } from '../lib/tiingo'
 import type { MonthlyTickerReturn, DailyTickerReturn, IntradayPricePoint } from '../lib/tiingo'
 import type { Currency, Account } from '../types'
 
@@ -335,6 +336,7 @@ export default function Investments() {
   const [showTableView, setShowTableView] = useState(false)
   const [dailyReturnsMap, setDailyReturnsMap] = useState<Map<string, DailyTickerReturn[]>>(new Map())
   const [intradayMap, setIntradayMap] = useState<Map<string, IntradayPricePoint[]>>(new Map())
+  const [intradayRefreshNonce, setIntradayRefreshNonce] = useState(0)
   const [historyRange, setHistoryRange] = useState<HistRangeKey>(() => {
     const stored = localStorage.getItem('dinner-money:perf-range')
     // Migrate old lowercase values to uppercase
@@ -376,12 +378,7 @@ export default function Investments() {
 
   // ── Core value helpers ──
 
-  const getAccountBaseValue = (a: typeof accounts[0]) => {
-    if (a.holdings && a.holdings.length > 0) {
-      return a.holdings.reduce((sum, h) => sum + convertToBase(h.institutionValue, h.currency as Currency, profile.baseCurrency, liveEurUsdRate), 0)
-    }
-    return convertToBase(a.balance, a.currency, profile.baseCurrency, liveEurUsdRate)
-  }
+  const getAccountBaseValue = (a: typeof accounts[0]) => accountBaseValue(a, profile.baseCurrency, liveEurUsdRate)
 
   const invested = includedAccounts
     .filter(a => a.type === 'investment' || a.type === 'retirement')
@@ -892,6 +889,16 @@ export default function Investments() {
     return () => { cancelled = true }
   }, [tiingoApiKey, lmProxyUrl, perfTickersKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (historyRange !== '1D' || !tiingoApiKey || investableTickers.length === 0) return
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && isUsMarketHours()) setIntradayRefreshNonce(n => n + 1)
+    }
+    const id = setInterval(refresh, 60_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', refresh) }
+  }, [historyRange, tiingoApiKey, investableTickers.length])
+
   // ── Intraday prices (for 1D chart + today's snapshot point) ──
   useEffect(() => {
     if (!tiingoApiKey) return
@@ -910,7 +917,41 @@ export default function Investments() {
       setIntradayMap(map)
     })
     return () => { cancelled = true }
-  }, [tiingoApiKey, lmProxyUrl, perfTickersKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tiingoApiKey, lmProxyUrl, perfTickersKey, intradayRefreshNonce]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const intradayTodayData = useMemo(() => {
+    const spyIntraday = intradayMap.get('SPY') ?? []
+    if (spyIntraday.length < 2) return null
+    const latestDate = spyIntraday[spyIntraday.length - 1].date.slice(0, 10)
+    const todaySpy = spyIntraday.filter(point => point.date.startsWith(latestDate))
+    if (todaySpy.length < 2) return null
+    const baseByTicker = new Map<string, number>()
+    const latestByTicker = new Map<string, number>()
+    for (const [ticker, prices] of intradayMap) {
+      const todayPrices = prices.filter(point => point.date.startsWith(latestDate))
+      if (todayPrices.length < 2) continue
+      baseByTicker.set(ticker, todayPrices[0].close)
+      latestByTicker.set(ticker, todayPrices[todayPrices.length - 1].close)
+    }
+    let totalValue = 0
+    let weightedReturn = 0
+    for (const { ticker, value, startMonth } of perfHoldings) {
+      if (startMonth && latestDate.slice(0, 7) < startMonth) continue
+      const upperTicker = ticker.toUpperCase()
+      const base = baseByTicker.get(upperTicker)
+      const latest = latestByTicker.get(upperTicker)
+      if (base == null || latest == null || base <= 0) continue
+      weightedReturn += (latest / base - 1) * value
+      totalValue += value
+    }
+    const spyBase = todaySpy[0].close
+    const spyLatest = todaySpy[todaySpy.length - 1].close
+    return {
+      pct: totalValue > 0 ? weightedReturn / totalValue : null,
+      spy: spyBase > 0 ? spyLatest / spyBase - 1 : null,
+      date: latestDate,
+    }
+  }, [intradayMap, perfHoldings])
 
   // ── Publish portfolio snapshot to store (for sidebar widget) ──
   // Use refs for frequently-changing values so the effect only fires when
@@ -920,7 +961,7 @@ export default function Investments() {
   const snapshotInvestedRef = useRef(invested)
   snapshotInvestedRef.current = invested
   const snapshotTodayRef = useRef(todayData)
-  snapshotTodayRef.current = todayData
+  snapshotTodayRef.current = intradayTodayData ?? todayData
 
   useEffect(() => {
     if (dailyReturnsMap.size === 0) return
@@ -991,7 +1032,7 @@ export default function Investments() {
       todayAmt: td.pct != null ? td.pct * inv : null,
       points: raw.map(p => ({ date: p.date, value: Math.round(startVal * p.portfolioCum) })),
     })
-  }, [dailyReturnsMap, intradayMap, setPortfolioSnapshot]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dailyReturnsMap, intradayMap, setPortfolioSnapshot, intradayTodayData]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Full positions sync (LM + Plaid + IBKR) ──
 

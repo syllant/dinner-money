@@ -2,6 +2,7 @@ import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-d
 import { AppShell } from './components/layout/AppShell'
 import { useAppStore } from './store/useAppStore'
 import Overview from './pages/Overview'
+import Lifetime from './pages/Lifetime'
 import Investments from './pages/Investments'
 import CashFlow from './pages/CashFlow'
 import Currencies from './pages/Currencies'
@@ -32,6 +33,7 @@ export default function App() {
         <OnboardingGate>
         <Routes>
           <Route path="/" element={<Overview />} />
+          <Route path="/lifetime" element={<Lifetime />} />
           <Route path="/investments" element={<Investments />} />
           <Route path="/cash" element={<CashFlow />} />
           <Route path="/currencies" element={<Currencies />} />

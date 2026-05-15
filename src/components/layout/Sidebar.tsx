@@ -9,7 +9,7 @@ import {
 import { clsx } from 'clsx'
 import { useAppStore } from '../../store/useAppStore'
 import { fetchEcbRatesCached, readEcbCache, isEcbMarketDay, ECB_CACHE_KEY, ECB_CACHE_TTL, type EcbDailyRatePoint, type EcbCache } from '../../lib/ecb'
-import { fetchIntradayPrices, fetchIntradayFxRates, type IntradayPricePoint } from '../../lib/tiingo'
+import { fetchIntradayPrices, fetchIntradayFxRates, isUsMarketHours, type IntradayPricePoint } from '../../lib/tiingo'
 import { fastSyncAccounts, syncAllAccounts } from '../../lib/lmSync'
 import { InfoTooltip } from '../ui/InfoTooltip'
 
@@ -47,7 +47,8 @@ interface NavItem {
 }
 
 const insightItems: NavItem[] = [
-  { to: '/', label: 'Lifetime projection', icon: <LayoutDashboard size={13} /> },
+  { to: '/', label: 'Overview', icon: <LayoutDashboard size={13} /> },
+  { to: '/lifetime', label: 'Lifetime projection', icon: <Clock size={13} /> },
   { to: '/investments', label: 'Investments', icon: <TrendingUp size={13} /> },
   { to: '/cash', label: 'Cash flow', icon: <PiggyBank size={13} /> },
   { to: '/currencies', label: 'Currency', icon: <CircleDollarSign size={13} /> },
@@ -152,6 +153,7 @@ function SidebarSettingsRow({ collapsed }: { collapsed: boolean }) {
 }
 
 const AUTO_FAST_SYNC_TTL = 60 * 60 * 1000 // 1 hour
+const AUTO_FULL_SYNC_TTL = 12 * 60 * 60 * 1000 // 12 hours
 
 function SidebarSync({ collapsed, onSyncComplete }: { collapsed: boolean; onSyncComplete?: () => void }) {
   const { lmApiKey, fastSyncedAt, setFastSyncedAt, fullSyncedAt, setFullSyncedAt } = useAppStore()
@@ -214,17 +216,30 @@ function SidebarSync({ collapsed, onSyncComplete }: { collapsed: boolean; onSync
     }
   }
 
-  // Auto-refresh on first mount if no fast sync yet or > 1h stale
+  // Auto-refresh when sync timestamps are stale, including when the app becomes visible again.
   const handleFastSyncRef = useRef(handleFastSync)
+  const handleFullSyncRef = useRef(handleFullSync)
   handleFastSyncRef.current = handleFastSync
+  handleFullSyncRef.current = handleFullSync
   useEffect(() => {
-    const state = useAppStore.getState()
-    if (!state.lmApiKey || !state.accounts.length) return
-    const last = state.fastSyncedAt
-    if (!last || Date.now() - new Date(last).getTime() > AUTO_FAST_SYNC_TTL) {
-      handleFastSyncRef.current()
+    function maybeSync() {
+      if (document.visibilityState !== 'visible') return
+      const state = useAppStore.getState()
+      if (!state.lmApiKey) return
+      const now = Date.now()
+      const lastFull = state.fullSyncedAt ? new Date(state.fullSyncedAt).getTime() : 0
+      const lastFast = state.fastSyncedAt ? new Date(state.fastSyncedAt).getTime() : 0
+      if (!lastFull || now - lastFull > AUTO_FULL_SYNC_TTL) {
+        handleFullSyncRef.current()
+      } else if (!lastFast || now - lastFast > AUTO_FAST_SYNC_TTL) {
+        handleFastSyncRef.current()
+      }
     }
-  }, []) // run once on mount
+    maybeSync()
+    document.addEventListener('visibilitychange', maybeSync)
+    const id = setInterval(maybeSync, 5 * 60 * 1000)
+    return () => { document.removeEventListener('visibilitychange', maybeSync); clearInterval(id) }
+  }, [])
 
   const fastStatus = fastSyncing ? 'Syncing…' : fastFailed ? 'Failed' : fastRelTime || 'Never'
   const fullStatus = fullSyncing ? 'Syncing…' : fullFailed ? 'Failed' : fullRelTime || 'Never'
@@ -413,6 +428,7 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
   const [autoRefreshNonce, setAutoRefreshNonce] = useState(0)
   const [intradayPoints, setIntradayPoints] = useState<Array<{ date: string; value: number }>>([])
   const [intradayLoading, setIntradayLoading] = useState(false)
+  const [intradayRefreshNonce, setIntradayRefreshNonce] = useState(0)
   const [fxIntradayPoints, setFxIntradayPoints] = useState<Array<{ date: string; value: number }>>([])
   const [fxIntradayLoading, setFxIntradayLoading] = useState(false)
 
@@ -440,20 +456,19 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
     [portfolioValues]
   )
 
-  // Range gain/loss: for 1d use snapshot today values; for other ranges derive from visible points
+  // Range gain/loss derives from the visible points, including 1d intraday, so color
+  // and numeric return always agree with the sparkline.
   const rangeGainPct = useMemo(() => {
-    if (portfolioRange === '1d') return snapshot?.todayPct ?? null
     const nonNull = portfolioPoints.filter((p): p is { date: string; value: number } => p.value != null)
     if (nonNull.length < 2 || nonNull[0].value <= 0) return null
     return (nonNull[nonNull.length - 1].value - nonNull[0].value) / nonNull[0].value
-  }, [portfolioRange, snapshot?.todayPct, portfolioPoints])
+  }, [portfolioPoints])
 
   const rangeGainAmt = useMemo(() => {
-    if (portfolioRange === '1d') return snapshot?.todayAmt ?? null
     const nonNull = portfolioPoints.filter((p): p is { date: string; value: number } => p.value != null)
     if (nonNull.length < 2) return null
     return nonNull[nonNull.length - 1].value - nonNull[0].value
-  }, [portfolioRange, snapshot?.todayAmt, portfolioPoints])
+  }, [portfolioPoints])
 
   const isPortUp = rangeGainPct != null ? rangeGainPct >= 0 : null
   const portColor = isPortUp == null ? '#9ca3af' : isPortUp ? '#16a34a' : '#dc2626'
@@ -547,7 +562,17 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
       .catch(() => { if (!cancelled) setIntradayLoading(false) })
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [portfolioRange, tiingoApiKey, lmProxyUrl, snapshot?.invested, investableHoldings])
+  }, [portfolioRange, tiingoApiKey, lmProxyUrl, snapshot?.invested, investableHoldings, intradayRefreshNonce])
+
+  useEffect(() => {
+    if (portfolioRange !== '1d' || !tiingoApiKey || investableHoldings.length === 0) return
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && isUsMarketHours()) setIntradayRefreshNonce(n => n + 1)
+    }
+    const id = setInterval(refresh, 60_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', refresh) }
+  }, [portfolioRange, tiingoApiKey, investableHoldings.length])
 
   // Background auto-refresh on weekdays when cache is stale
   useEffect(() => {
@@ -589,7 +614,7 @@ function SidebarPortfolioFx({ refreshKey = 0 }: { refreshKey?: number }) {
         // FX trades 24/5 but we only want the regular session window (~9 AM ET onward).
         // Both this and the portfolio intraday must stay in sync — see padToMarketClose.
         const isDST = (() => { const m = new Date(latestDate + 'T12:00:00Z').getUTCMonth(); return m >= 2 && m <= 9 })()
-        const openHourUTC = isDST ? 13 : 14  // 9 AM ET in UTC (hourly boundary)
+        const openHourUTC = isDST ? 14 : 15  // 10 AM ET hourly point, matching portfolio intraday
         const sessionPts = pts
           .filter(p => p.date.startsWith(latestDate) && new Date(p.date).getUTCHours() >= openHourUTC)
           .map(p => ({ date: p.date, value: p.close }))

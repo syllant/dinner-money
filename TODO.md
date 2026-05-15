@@ -13,4 +13,6 @@ This is a personal backlog, not intended for automated implementation from AI ag
 * Tax page is hardcoded to California (FTB) for the state column — generalize if app is used outside CA
 * Demo mode with fake data
 * Overview page
+* EUR/USD trend: add a setting to specify which currency should be stronger (or, default, use the currency of the current residency country)
+* Events page to group Pensions, etc.
 * Consolidate LunchMoney features

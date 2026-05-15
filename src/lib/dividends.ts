@@ -1,5 +1,7 @@
 import { convertToBase } from './currency'
 import type { Account } from '../types'
+import { DEFAULT_EUR_USD_RATE } from './currency'
+import { projectDividends, type TickerDividend } from './tiingo'
 
 // US equities typically pay dividends quarterly in these months
 export const DIVIDEND_MONTHS = new Set([3, 6, 9, 12])
@@ -32,4 +34,37 @@ export function projectedAnnualDividendsEUR(accounts: Account[], eurUsdRate: num
       }
       return sum + convertToBase(acc.balance, acc.currency, 'EUR', eurUsdRate) * 0.02
     }, 0)
+}
+
+export function computeAnnualDividendsEUR(
+  accounts: Account[],
+  dividendHistory: Record<string, TickerDividend[]>,
+  fxRate: number = DEFAULT_EUR_USD_RATE,
+): number {
+  const invAccounts = accounts.filter(
+    account => (account.type === 'investment' || account.type === 'retirement') &&
+      account.includedInPlanning !== false,
+  )
+  const today = new Date()
+  const todayStr = today.toISOString().slice(0, 10)
+  const yearLater = new Date(today)
+  yearLater.setFullYear(yearLater.getFullYear() + 1)
+  const yearLaterStr = yearLater.toISOString().slice(0, 10)
+
+  let tiingoTotal = 0
+  let hasTiingo = false
+  for (const account of invAccounts) {
+    for (const holding of account.holdings ?? []) {
+      if (!holding.ticker || /^CUR:/.test(holding.ticker)) continue
+      const history = dividendHistory[holding.ticker]
+      if (!history?.length) continue
+      hasTiingo = true
+      const projected = projectDividends(holding.ticker, history, holding.quantity, 13)
+        .filter(dividend => dividend.paymentDate >= todayStr && dividend.paymentDate <= yearLaterStr)
+      for (const dividend of projected) {
+        tiingoTotal += convertToBase(dividend.totalAmount, holding.currency, 'EUR', fxRate)
+      }
+    }
+  }
+  return hasTiingo && tiingoTotal > 0 ? tiingoTotal : projectedAnnualDividendsEUR(invAccounts, fxRate)
 }

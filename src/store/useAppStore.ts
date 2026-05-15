@@ -145,10 +145,10 @@ interface AppState {
   /** Live ECB EUR/USD spot rate — updated by sidebar on load, NOT persisted */
   liveEurUsdRate: number
   setLiveEurUsdRate: (rate: number) => void
-  /** Timestamp of last fast-sync (LM balances only). Runtime — not persisted. */
+  /** Timestamp of last fast-sync (LM balances only). */
   fastSyncedAt: string | null
   setFastSyncedAt: (at: string | null) => void
-  /** Timestamp of last full-sync (LM + Plaid + IBKR). Runtime — not persisted. */
+  /** Timestamp of last full-sync (LM + Plaid + IBKR). */
   fullSyncedAt: string | null
   setFullSyncedAt: (at: string | null) => void
   setSimulationResult: (result: SimulationResult | null) => void
@@ -408,6 +408,7 @@ export const useAppStore = create<AppState>()(
         dividendHistory: s.dividendHistory,
         dividendSyncedAt: s.dividendSyncedAt,
         portfolioSnapshot: s.portfolioSnapshot,
+        fastSyncedAt: s.fastSyncedAt,
         fullSyncedAt: s.fullSyncedAt,
       }),
       merge: (persistedState: any, currentState) => {
