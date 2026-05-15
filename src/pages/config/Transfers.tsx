@@ -176,7 +176,7 @@ function TransferRow({ t, editing, setEditing, onDuplicate, onDelete, onSave }: 
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function Transfers() {
+export default function Transfers({ showHeader = true }: { showHeader?: boolean }) {
   const { transfers, upsertTransfer, deleteTransfer } = useAppStore()
   const [editing, setEditing] = useState<Transfer | null>(null)
   const { sort, toggle: handleSort } = useSort<SortKey>('period')
@@ -203,14 +203,16 @@ export default function Transfers() {
 
   return (
     <div>
-      <PageHeader title="Transfers">
-        <button
-          className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          onClick={() => setEditing(blank())}
-        >
-          + Add transfer
-        </button>
-      </PageHeader>
+      {showHeader && (
+        <PageHeader title="Transfers">
+          <button
+            className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            onClick={() => setEditing(blank())}
+          >
+            + Add transfer
+          </button>
+        </PageHeader>
+      )}
 
       <div className="p-4 space-y-4">
         <p className="text-[11.5px] text-gray-500 dark:text-gray-400">

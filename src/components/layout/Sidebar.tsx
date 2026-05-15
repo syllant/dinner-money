@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, PiggyBank,
-  FileText, User, CreditCard, Clock, Home, Receipt,
-  Banknote, Settings, ArrowLeftRight, CircleDollarSign,
+  FileText, User, CreditCard, Clock, CalendarDays,
+  Settings as SettingsIcon, CircleDollarSign,
   RefreshCw, Loader2, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -57,12 +57,9 @@ const insightItems: NavItem[] = [
 const configItems: NavItem[] = [
   { to: '/config/profile', label: 'Profile', icon: <User size={13} /> },
   { to: '/config/accounts', label: 'Accounts', icon: <CreditCard size={13} /> },
-  { to: '/config/pensions', label: 'Pensions', icon: <Clock size={13} /> },
-  { to: '/config/real-estate', label: 'Real estate', icon: <Home size={13} /> },
-  { to: '/config/income', label: 'Income', icon: <Banknote size={13} /> },
-  { to: '/config/expenses', label: 'Expenses', icon: <Receipt size={13} /> },
-  { to: '/config/transfers', label: 'Transfers', icon: <ArrowLeftRight size={13} /> },
+  { to: '/config/events', label: 'Events', icon: <CalendarDays size={13} /> },
   { to: '/config/tax', label: 'Tax', icon: <FileText size={13} /> },
+  { to: '/config/settings', label: 'Settings', icon: <SettingsIcon size={13} /> },
 ]
 
 function SidebarNavItem({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
@@ -87,9 +84,7 @@ function SidebarNavItem({ item, collapsed }: { item: NavItem; collapsed: boolean
   )
 }
 
-function SidebarSettingsRow({ collapsed }: { collapsed: boolean }) {
-  const location = useLocation()
-  const isActive = location.pathname === '/settings' || location.pathname.startsWith('/settings/')
+function SidebarCurrencyToggle({ collapsed }: { collapsed: boolean }) {
   const { profile, setProfile, setSimulationResult } = useAppStore()
   const currency = profile.baseCurrency
   const setCurrency = (next: 'EUR' | 'USD') => {
@@ -98,56 +93,29 @@ function SidebarSettingsRow({ collapsed }: { collapsed: boolean }) {
   }
 
   if (collapsed) {
-    return (
-      <NavLink
-        to="/settings"
-        title="Settings"
-        className={clsx(
-          'flex items-center justify-center py-[6px] text-[12.5px] rounded-[5px] mx-[5px] my-[1px] transition-colors',
-          isActive
-            ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white font-medium'
-            : 'text-gray-500 dark:text-gray-400 hover:bg-white/70 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-100'
-        )}
-      >
-        <span className="opacity-65"><Settings size={13} /></span>
-      </NavLink>
-    )
+    return null
   }
 
   return (
-    <div className="flex items-center mx-[5px] my-[1px] gap-1">
-      <NavLink
-        to="/settings"
-        className={clsx(
-          'flex flex-1 items-center gap-[7px] px-[9px] py-[6px] text-[12.5px] rounded-[5px] transition-colors',
-          isActive
-            ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white font-medium'
-            : 'text-gray-500 dark:text-gray-400 hover:bg-white/70 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-100'
-        )}
-      >
-        <span className="opacity-65 flex-shrink-0"><Settings size={13} /></span>
-        Settings
-      </NavLink>
-      <div className="group relative flex h-[30px] shrink-0 rounded-full border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 p-[2px] gap-[1px]">
-        {(['EUR', 'USD'] as const).map(next => (
-          <button
-            key={next}
-            type="button"
-            onClick={() => setCurrency(next)}
-            className={clsx(
-              'h-[24px] w-[28px] flex items-center justify-center rounded-full text-[19px] leading-none transition-colors',
-              currency === next
-                ? 'bg-white dark:bg-gray-600 shadow-sm'
-                : 'hover:bg-white/60 dark:hover:bg-gray-700'
-            )}
-          >
-            {next === 'EUR' ? '🇪🇺' : '🇺🇸'}
-          </button>
-        ))}
-        <span className="pointer-events-none absolute bottom-full right-0 mb-1.5 z-50 w-44 rounded-lg bg-gray-900 px-2.5 py-2 text-[10px] leading-[1.4] text-white opacity-0 shadow-xl transition-opacity duration-100 group-hover:opacity-100 dark:bg-gray-700">
-          Base currency — switches all amounts and projections between EUR and USD.
-        </span>
-      </div>
+    <div className="group relative flex h-[24px] rounded-full border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 p-[2px] gap-[1px]">
+      {(['EUR', 'USD'] as const).map(next => (
+        <button
+          key={next}
+          type="button"
+          onClick={() => setCurrency(next)}
+          className={clsx(
+            'h-[18px] w-[24px] flex items-center justify-center rounded-full text-[15px] leading-none transition-colors',
+            currency === next
+              ? 'bg-white dark:bg-gray-600 shadow-sm'
+              : 'hover:bg-white/60 dark:hover:bg-gray-700'
+          )}
+        >
+          {next === 'EUR' ? '🇪🇺' : '🇺🇸'}
+        </button>
+      ))}
+      <span className="pointer-events-none absolute top-full right-0 mt-1.5 z-50 w-44 rounded-lg bg-gray-900 px-2.5 py-2 text-[10px] leading-[1.4] normal-case tracking-normal text-white opacity-0 shadow-xl transition-opacity duration-100 group-hover:opacity-100 dark:bg-gray-700">
+        Base currency — switches all amounts and projections between EUR and USD.
+      </span>
     </div>
   )
 }
@@ -890,8 +858,9 @@ export function Sidebar() {
 
       {/* Insights nav */}
       {!collapsed && (
-        <div className="px-[10px] pt-[10px] pb-[3px] text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">
-          Insights
+        <div className="flex items-center justify-between px-[10px] pt-[8px] pb-[3px]">
+          <span className="text-[10px] font-medium text-gray-400 uppercase tracking-[0.06em]">Insights</span>
+          <SidebarCurrencyToggle collapsed={collapsed} />
         </div>
       )}
       {collapsed && <div className="h-[6px]" />}
@@ -917,11 +886,7 @@ export function Sidebar() {
         <SidebarPortfolioFx refreshKey={fxRefreshKey} />
       )}
 
-      {/* Sync status — above Settings row */}
       <SidebarSync collapsed={collapsed} onSyncComplete={() => setFxRefreshKey(k => k + 1)} />
-
-      {/* Settings row with currency toggle */}
-      <SidebarSettingsRow collapsed={collapsed} />
 
     </div>
   )

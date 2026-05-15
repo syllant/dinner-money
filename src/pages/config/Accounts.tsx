@@ -721,13 +721,13 @@ export default function Accounts() {
       <div className="p-4 space-y-3">
         {!lmApiKey && (
           <Banner variant="warning">
-            No LunchMoney API key — <a href="#/settings" className="underline font-medium">add one in Settings</a> to sync accounts.
+            No LunchMoney API key — <a href="#/config/settings" className="underline font-medium">add one in Settings</a> to sync accounts.
           </Banner>
         )}
         {lmApiKey && !lmProxyUrl && accounts.length === 0 && (
           <Banner variant="info">
             A CORS proxy is required to sync from LunchMoney.{' '}
-            <a href="#/settings" className="underline font-medium">Set up a Cloudflare Worker in Settings</a>, then come back here to sync.
+            <a href="#/config/settings" className="underline font-medium">Set up a Cloudflare Worker in Settings</a>, then come back here to sync.
           </Banner>
         )}
 
@@ -983,9 +983,9 @@ export default function Accounts() {
                                   </span>
                                 )}
                                 {ibkrConfigured ? (
-                                  <span className="text-gray-500 dark:text-gray-400">Token and Query ID are configured in <a href="#/settings" className="underline">Settings</a>.</span>
+                                  <span className="text-gray-500 dark:text-gray-400">Token and Query ID are configured in <a href="#/config/settings" className="underline">Settings</a>.</span>
                                 ) : (
-                                  <span className="text-amber-600 dark:text-amber-400">Set the IBKR token and Query ID in <a href="#/settings" className="underline font-medium">Settings</a>.</span>
+                                  <span className="text-amber-600 dark:text-amber-400">Set the IBKR token and Query ID in <a href="#/config/settings" className="underline font-medium">Settings</a>.</span>
                                 )}
                                 {ibkrConfigured && (
                                   <button type="button" onClick={loadIbkrAccountIds} disabled={ibkrIdsLoading} className="ml-auto px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-white dark:hover:bg-gray-800 disabled:opacity-50">

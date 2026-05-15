@@ -358,7 +358,7 @@ function ExpenseRow({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function Expenses() {
+export default function Expenses({ showHeader = true }: { showHeader?: boolean }) {
   const {
     expenses, medicalCoverages, medicalExpenses,
     upsertExpense, deleteExpense,
@@ -402,14 +402,16 @@ export default function Expenses() {
 
   return (
     <div>
-      <PageHeader title="Expenses">
-        <button
-          className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          onClick={() => setEditing(blankExpense())}
-        >
-          + Add expense
-        </button>
-      </PageHeader>
+      {showHeader && (
+        <PageHeader title="Expenses">
+          <button
+            className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            onClick={() => setEditing(blankExpense())}
+          >
+            + Add expense
+          </button>
+        </PageHeader>
+      )}
 
       <div className="p-4 space-y-4">
         {editing && !all.find(e => e.id === editing.id) && (

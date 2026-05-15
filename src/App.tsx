@@ -9,19 +9,15 @@ import Currencies from './pages/Currencies'
 import Tax from './pages/Tax'
 import Profile from './pages/config/Profile'
 import Accounts from './pages/config/Accounts'
-import Pensions from './pages/config/Pensions'
-import RealEstate from './pages/config/RealEstate'
-import Expenses from './pages/config/Expenses'
-import Windfalls from './pages/config/Windfalls'
-import Transfers from './pages/config/Transfers'
+import Events from './pages/config/Events'
 import Settings from './pages/config/Settings'
 
-/** Redirects to /settings when no API key is configured yet */
+/** Redirects to Settings when no API key is configured yet */
 function OnboardingGate({ children }: { children: React.ReactNode }) {
   const lmApiKey = useAppStore((s) => s.lmApiKey)
   const { pathname } = useLocation()
-  if (!lmApiKey && pathname !== '/settings') {
-    return <Navigate to="/settings" replace />
+  if (!lmApiKey && pathname !== '/config/settings') {
+    return <Navigate to="/config/settings" replace />
   }
   return <>{children}</>
 }
@@ -41,13 +37,17 @@ export default function App() {
           <Route path="/config/profile" element={<Profile />} />
           <Route path="/config/accounts" element={<Accounts />} />
           <Route path="/config/tax" element={<Tax />} />
-          <Route path="/config/pensions" element={<Pensions />} />
-          <Route path="/config/real-estate" element={<RealEstate />} />
-          <Route path="/config/income" element={<Windfalls />} />
-          <Route path="/config/windfalls" element={<Windfalls />} />
-          <Route path="/config/expenses" element={<Expenses />} />
-          <Route path="/config/transfers" element={<Transfers />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/config/events" element={<Events />} />
+          <Route path="/config/events/:tab" element={<Events />} />
+          <Route path="/config/pensions" element={<Navigate to="/config/events/pensions" replace />} />
+          <Route path="/config/real-estate" element={<Navigate to="/config/events/real-estate" replace />} />
+          <Route path="/config/income" element={<Navigate to="/config/events/income" replace />} />
+          <Route path="/config/windfalls" element={<Navigate to="/config/events/income" replace />} />
+          <Route path="/config/expenses" element={<Navigate to="/config/events/expenses" replace />} />
+          <Route path="/config/transfers" element={<Navigate to="/config/events/transfers" replace />} />
+          <Route path="/config/settings" element={<Settings />} />
+          <Route path="/config/preferences" element={<Navigate to="/config/settings" replace />} />
+          <Route path="/settings" element={<Navigate to="/config/settings" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </OnboardingGate>

@@ -383,7 +383,7 @@ function EditForm({ editing, onChange, onSave, onCancel, categoryOptions, embedd
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function Windfalls() {
+export default function Windfalls({ showHeader = true }: { showHeader?: boolean }) {
   const { windfalls, upsertWindfall, deleteWindfall } = useAppStore()
   const [editing, setEditing] = useState<Windfall | null>(null)
   const { sort, toggle: handleSort } = useSort<SortKey>('period')
@@ -416,14 +416,16 @@ export default function Windfalls() {
 
   return (
     <div>
-      <PageHeader title="Income">
-        <button
-          className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          onClick={() => setEditing(blank())}
-        >
-          + Add income
-        </button>
-      </PageHeader>
+      {showHeader && (
+        <PageHeader title="Income">
+          <button
+            className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            onClick={() => setEditing(blank())}
+          >
+            + Add income
+          </button>
+        </PageHeader>
+      )}
 
       <div className="p-4 space-y-4">
         {editing && !windfalls.find(w => w.id === editing.id) && (

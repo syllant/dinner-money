@@ -198,7 +198,7 @@ function PensionRow({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function Pensions() {
+export default function Pensions({ showHeader = true }: { showHeader?: boolean }) {
   const { pensions, upsertPension, deletePension, profile } = useAppStore()
   const [editing, setEditing] = useState<PensionEstimate | null>(null)
   const { sort, toggle: handleSort } = useSort<SortKey>('source')
@@ -220,14 +220,16 @@ export default function Pensions() {
 
   return (
     <div>
-      <PageHeader title="Pensions">
-        <button
-          className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-          onClick={() => setEditing(defaultPension('US_SS'))}
-        >
-          + Add pension source
-        </button>
-      </PageHeader>
+      {showHeader && (
+        <PageHeader title="Pensions">
+          <button
+            className="text-[11.5px] px-3 py-1 rounded-[5px] border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            onClick={() => setEditing(defaultPension('US_SS'))}
+          >
+            + Add pension source
+          </button>
+        </PageHeader>
+      )}
 
       <div className="p-4 space-y-4">
         <p className="text-[11.5px] text-gray-500 dark:text-gray-400">

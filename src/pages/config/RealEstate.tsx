@@ -165,13 +165,13 @@ function RealEstateRow({
   )
 }
 
-export default function RealEstate() {
+export default function RealEstate({ showHeader = true }: { showHeader?: boolean }) {
   const { realEstateEvents, upsertRealEstateEvent, deleteRealEstateEvent } = useAppStore()
   const [editing, setEditing] = useState<RealEstateEvent | null>(null)
 
   return (
     <div>
-      <PageHeader title="Real estate" />
+      {showHeader && <PageHeader title="Real estate" />}
       <div className="p-4 space-y-3">
         {editing && !realEstateEvents.find(e => e.id === editing.id) && (
           <div className="border border-blue-200 dark:border-blue-700 rounded-xl p-4 bg-blue-50 dark:bg-blue-900/10 space-y-3 mb-4">
