@@ -100,26 +100,34 @@ function SectionTitle({ to, title, tooltip, right }: {
   )
 }
 
-function MiniSparkline({ points, color = '#378ADD', height = 72, formatValue }: {
+function MiniSparkline({ points, color = '#378ADD', height = 72, axisWidth = 42, formatValue, formatAxisValue }: {
   points: Array<{ date: string; value: number | null }>
   color?: string
   height?: number
+  axisWidth?: number
   formatValue?: (value: number) => string
+  formatAxisValue?: (value: number) => string
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const values = points.map(point => point.value).filter((value): value is number => value != null && isFinite(value))
   if (values.length < 2) {
     return <div className="rounded-md bg-gray-50 dark:bg-gray-800" style={{ height }} />
   }
-  const width = 260
+  const width = 320
+  const left = axisWidth + 4
+  const right = 6
   const axisY = height - 14
+  const plotTop = 6
+  const plotBottom = height - 20
   const min = Math.min(...values)
   const max = Math.max(...values)
   const span = Math.max(max - min, 0.0001)
+  const valueFormatter = formatValue ?? ((value: number) => value.toLocaleString())
+  const axisValueFormatter = formatAxisValue ?? valueFormatter
   const coords = points.map((point, index) => {
     if (point.value == null) return null
-      const x = 6 + index * ((width - 12) / Math.max(1, points.length - 1))
-      const y = height - 20 - ((point.value - min) / span) * (height - 30)
+      const x = left + index * ((width - left - right) / Math.max(1, points.length - 1))
+      const y = plotBottom - ((point.value - min) / span) * (plotBottom - plotTop)
       return { x, y, point, index }
     })
   const path = coords
@@ -128,9 +136,14 @@ function MiniSparkline({ points, color = '#378ADD', height = 72, formatValue }: 
     .join(' ')
   const ticks = [...new Set([0, Math.round((points.length - 1) / 3), Math.round((points.length - 1) * 2 / 3), points.length - 1])]
     .filter(index => index >= 0 && index < points.length)
+  const tickLabels = ticks.map(index => ({
+    index,
+    label: fmtAxisDate(points[index].date),
+    leftPct: (left + index * ((width - left - right) / Math.max(1, points.length - 1))) / width * 100,
+  }))
   const hoverCoord = hoverIdx != null ? coords[hoverIdx] : null
   const tooltipText = hoverCoord && hoverCoord.point.value != null
-    ? `${fmtAxisDate(hoverCoord.point.date)} · ${(formatValue ?? ((value: number) => value.toLocaleString()))(hoverCoord.point.value)}`
+    ? `${fmtAxisDate(hoverCoord.point.date)} · ${valueFormatter(hoverCoord.point.value)}`
     : ''
   const handleMove = (event: React.MouseEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -151,16 +164,14 @@ function MiniSparkline({ points, color = '#378ADD', height = 72, formatValue }: 
         onMouseMove={handleMove}
         onMouseLeave={() => setHoverIdx(null)}
       >
+        <line x1={left} y1={plotTop} x2={left} y2={axisY} stroke="#e5e7eb" strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
         <polyline points={path} fill="none" stroke={color} strokeWidth="2.25" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-        <line x1="6" y1={axisY} x2={width - 6} y2={axisY} stroke="#e5e7eb" strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
+        <line x1={left} y1={axisY} x2={width - right} y2={axisY} stroke="#e5e7eb" strokeWidth="0.8" vectorEffect="non-scaling-stroke" />
         {ticks.map(index => {
-          const x = 6 + index * ((width - 12) / Math.max(1, points.length - 1))
+          const x = left + index * ((width - left - right) / Math.max(1, points.length - 1))
           return (
             <g key={index}>
               <line x1={x} y1={axisY} x2={x} y2={axisY + 3} stroke="#d1d5db" strokeWidth="0.7" vectorEffect="non-scaling-stroke" />
-              <text x={x} y={height - 2} textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'} fontSize="8.5" fill="#9ca3af">
-                {fmtAxisDate(points[index].date)}
-              </text>
             </g>
           )
         })}
@@ -183,6 +194,27 @@ function MiniSparkline({ points, color = '#378ADD', height = 72, formatValue }: 
           {tooltipText}
         </div>
       )}
+      <div
+        className="pointer-events-none absolute left-0 whitespace-nowrap pr-1 text-right font-sans text-[9px] leading-none text-gray-400 tabular-nums"
+        style={{ top: plotTop - 2, width: axisWidth }}
+      >
+        {axisValueFormatter(max)}
+      </div>
+      <div
+        className="pointer-events-none absolute left-0 whitespace-nowrap pr-1 text-right font-sans text-[9px] leading-none text-gray-400 tabular-nums"
+        style={{ top: plotBottom - 5, width: axisWidth }}
+      >
+        {axisValueFormatter(min)}
+      </div>
+      {tickLabels.map(tick => (
+        <div
+          key={tick.index}
+          className="pointer-events-none absolute w-12 -translate-x-1/2 text-center font-sans text-[9px] leading-none text-gray-400"
+          style={{ left: `${tick.leftPct}%`, top: axisY + 5 }}
+        >
+          {tick.label}
+        </div>
+      ))}
     </div>
   )
 }
@@ -246,8 +278,19 @@ function dateDaysAgo(days: number): string {
   return date.toISOString().slice(0, 10)
 }
 
+function dateDaysBefore(dateStr: string, days: number): string {
+  const date = new Date(`${dateStr.slice(0, 10)}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return dateDaysAgo(days)
+  date.setDate(date.getDate() - days)
+  return date.toISOString().slice(0, 10)
+}
+
 function ytdStart(): string {
   return `${new Date().getFullYear()}-01-01`
+}
+
+function ytdStartFor(dateStr: string): string {
+  return `${dateStr.slice(0, 4)}-01-01`
 }
 
 function monthStart(): string {
@@ -255,12 +298,12 @@ function monthStart(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`
 }
 
-function rangeStart(range: SparkRange | FxRange): string {
-  if (range === '1D') return dateDaysAgo(2)
-  if (range === '1W') return dateDaysAgo(8)
-  if (range === '1M') return dateDaysAgo(33)
-  if (range === 'YTD') return ytdStart()
-  return dateDaysAgo(366)
+function rangeStart(range: SparkRange | FxRange, endDate: string): string {
+  if (range === '1D') return dateDaysBefore(endDate, 2)
+  if (range === '1W') return dateDaysBefore(endDate, 8)
+  if (range === '1M') return dateDaysBefore(endDate, 33)
+  if (range === 'YTD') return ytdStartFor(endDate)
+  return dateDaysBefore(endDate, 366)
 }
 
 function valueAtOrBefore(points: Array<{ date: string; value: number }>, date: string) {
@@ -279,9 +322,24 @@ function navReturn(points: Array<{ date: string; value: number }> | null, startD
 }
 
 function slicePoints(points: Array<{ date: string; value: number }>, range: SparkRange | FxRange) {
-  const start = rangeStart(range)
+  const endDate = points[points.length - 1]?.date
+  if (!endDate) return []
+  const start = rangeStart(range, endDate)
   const sliced = points.filter(point => point.date >= start)
   return (sliced.length >= 2 ? sliced : points.slice(-2)).map(point => ({ ...point }))
+}
+
+function mergeHistoricalPoints(
+  history: Array<{ date: string; value: number }> | null,
+  snapshot: Array<{ date: string; value: number }> | undefined,
+) {
+  if (!history?.length) return snapshot ?? []
+  if (!snapshot?.length) return history
+  const merged = new Map(history.map(point => [point.date, point.value]))
+  for (const point of snapshot) merged.set(point.date, point.value)
+  return [...merged.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, value]) => ({ date, value }))
 }
 
 function padToMarketClose(points: Array<{ date: string; value: number }>): Array<{ date: string; value: number | null }> {
@@ -569,7 +627,14 @@ function PortfolioCard({
       />
       <div className="text-[24px] font-semibold tracking-tight tabular-nums">{formatCurrency(value, currency)}</div>
       <div className="mt-2">
-        <MiniSparkline points={displayPoints} color={chartColor} height={96} formatValue={value => formatCurrency(value, currency)} />
+        <MiniSparkline
+          points={displayPoints}
+          color={chartColor}
+          height={96}
+          axisWidth={68}
+          formatValue={value => formatCurrency(value, currency)}
+          formatAxisValue={value => formatCurrency(value, currency)}
+        />
       </div>
     </Card>
   )
@@ -934,7 +999,7 @@ export default function Overview() {
   const invested = investmentAccountValue(planningAccounts, currency, liveEurUsdRate)
   const todayAmt = portfolioSnapshot?.todayAmt ?? null
   const navHistory = aggregateNavHistory(planningAccounts)
-  const portfolioPoints = portfolioSnapshot?.points?.length ? portfolioSnapshot.points : navHistory ?? []
+  const portfolioPoints = mergeHistoricalPoints(navHistory, portfolioSnapshot?.points)
   const currentInvestmentValue = portfolioSnapshot?.invested ?? invested
 
   const annualDivEUR = useMemo(
